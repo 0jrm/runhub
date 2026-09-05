@@ -2,7 +2,6 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ParseError } from "./domain.js";
-import { agentSetupExists } from "./adapters.js";
 
 export type Project = {
   name: string;
@@ -11,7 +10,6 @@ export type Project = {
   typecheck?: string;
   lint?: string;
   remote?: string;
-  sandbox?: "user" | "none";
 };
 
 export function projectsTomlPath(): string {
@@ -33,7 +31,6 @@ export function parseProjects(text: string): Project[] {
     typecheck?: string;
     lint?: string;
     remote?: string;
-    sandbox?: "user" | "none";
   } | undefined;
 
   const flush = (): void => {
@@ -52,7 +49,6 @@ export function parseProjects(text: string): Project[] {
     }
     if (current.lint !== undefined && current.lint.length > 0) project.lint = current.lint;
     if (current.remote !== undefined && current.remote.length > 0) project.remote = current.remote;
-    if (current.sandbox !== undefined) project.sandbox = current.sandbox;
     projects.push(project);
     current = undefined;
   };
@@ -86,12 +82,6 @@ export function parseProjects(text: string): Project[] {
     else if (key === "typecheck") current.typecheck = value;
     else if (key === "lint") current.lint = value;
     else if (key === "remote") current.remote = value;
-    else if (key === "sandbox") {
-      if (value !== "user" && value !== "none") {
-        throw new ParseError(`project [${current.name}] sandbox must be user or none`);
-      }
-      current.sandbox = value;
-    }
   }
   flush();
   return projects;
@@ -103,16 +93,10 @@ export type ResolvedCwd = {
   typecheck?: string;
   lint?: string;
   remote?: string;
-  sandbox: "user" | "none";
 };
 
-function defaultSandbox(project: Project): "user" | "none" {
-  if (project.sandbox !== undefined) return project.sandbox;
-  return agentSetupExists() ? "user" : "none";
-}
-
 function withProjectCmds(cwd: string, project: Project): ResolvedCwd {
-  const out: ResolvedCwd = { cwd, sandbox: defaultSandbox(project) };
+  const out: ResolvedCwd = { cwd };
   if (project.test !== undefined) out.test = project.test;
   if (project.typecheck !== undefined) out.typecheck = project.typecheck;
   if (project.lint !== undefined) out.lint = project.lint;
@@ -126,7 +110,7 @@ export function resolveRunCwd(raw: string, projects: readonly Project[]): Resolv
   const cwd = resolve(raw);
   const matched = projects.find((p) => pathsEqual(cwd, resolve(p.path)));
   if (matched !== undefined) return withProjectCmds(cwd, matched);
-  return { cwd, sandbox: "none" };
+  return { cwd };
 }
 
 function parseTomlValue(raw: string): string {

@@ -1,6 +1,5 @@
 export type AgentKind = "cursor" | "claude";
 export type ReviewKind = "claude" | "none";
-export type SandboxMode = "user" | "none";
 export type StepId = "agent" | "verify" | "review";
 export type Verdict = "APPROVE" | "REJECT" | "unparsed";
 export type DiffRange = { from: string; to: string };
@@ -27,7 +26,6 @@ export type Event =
       typecheckCmd?: string;
       lintCmd?: string;
       remote?: string;
-      sandbox: SandboxMode;
     }
   | { kind: "pipeline_started"; ts: string; runId: string; pid: number }
   | { kind: "base_recorded"; ts: string; runId: string; baseSha: string; branch: string }
@@ -63,8 +61,6 @@ export type Event =
   | { kind: "review_recorded"; ts: string; runId: string; verdict: Verdict; body: string }
   | { kind: "pr_opened"; ts: string; runId: string; url: string }
   | { kind: "error"; ts: string; runId: string; stepId?: StepId; message: string }
-  | { kind: "deps_warned"; ts: string; runId: string; lines: string[] }
-  | { kind: "run_killed"; ts: string; runId: string }
   | { kind: "run_finished"; ts: string; runId: string; status: "done" | "failed"; summary: string };
 
 export type VerifyResult = {
@@ -100,11 +96,7 @@ export type RunView = {
   typecheckCmd?: string;
   lintCmd?: string;
   remote?: string;
-  sandbox: SandboxMode;
   pipelinePid?: number;
-  agentPgid?: number;
-  killed?: boolean;
-  depsWarnings: string[];
   baseSha?: string;
   branch?: string;
   commitSha?: string;
@@ -263,8 +255,7 @@ export function listOutcome(
   view: RunView,
   now = Date.now(),
   pidLive?: boolean,
-): Outcome | "running" | "stale" | "killed" {
-  if (view.killed === true) return "killed";
+): Outcome | "running" | "stale" {
   if (view.status === "done" || view.status === "failed") return outcome(view);
   if (pidLive === true) return "running";
   if (pidLive === false) return "stale";
@@ -359,11 +350,6 @@ function asReview(x: unknown): ReviewKind {
   throw new ParseError("invalid review");
 }
 
-function asSandbox(x: unknown): SandboxMode {
-  if (x === "user" || x === "none") return x;
-  throw new ParseError("invalid sandbox");
-}
-
 function asStepId(x: unknown): StepId {
   if (x === "agent" || x === "verify" || x === "review") return x;
   throw new ParseError("invalid step id");
@@ -414,7 +400,6 @@ export function parseEvent(raw: unknown): Event {
           : {}),
         ...(typeof raw.lintCmd === "string" && raw.lintCmd.length > 0 ? { lintCmd: raw.lintCmd } : {}),
         ...(typeof raw.remote === "string" && raw.remote.length > 0 ? { remote: raw.remote } : {}),
-        sandbox: raw.sandbox === undefined ? "none" : asSandbox(raw.sandbox),
       };
     case "pipeline_started":
       return {
@@ -528,23 +513,6 @@ export function parseEvent(raw: unknown): Event {
         runId: asNonEmpty(raw.runId, "runId"),
         ...(raw.stepId === undefined ? {} : { stepId: asStepId(raw.stepId) }),
         message: asNonEmpty(raw.message, "message"),
-      };
-    case "deps_warned": {
-      if (!Array.isArray(raw.lines) || !raw.lines.every((i) => typeof i === "string")) {
-        throw new ParseError("lines must be a string array");
-      }
-      return {
-        kind,
-        ts: asTs(raw.ts, "ts"),
-        runId: asNonEmpty(raw.runId, "runId"),
-        lines: raw.lines,
-      };
-    }
-    case "run_killed":
-      return {
-        kind,
-        ts: asTs(raw.ts, "ts"),
-        runId: asNonEmpty(raw.runId, "runId"),
       };
     case "run_finished": {
       const status = raw.status;

@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { assertNever, type AgentKind } from "./domain.js";
@@ -8,36 +8,6 @@ export type SpawnResult = {
   timedOut: boolean;
   aborted: boolean;
 };
-
-export const AGENT_USER = "runhub-agent";
-export const AGENT_GROUP = "runhub";
-export const SANDBOX_PATH = "/usr/local/bin:/usr/bin:/bin";
-
-export function agentSetupExists(): boolean {
-  const r = spawnSync("getent", ["passwd", AGENT_USER], { encoding: "utf8" });
-  return (r.status ?? 1) === 0;
-}
-
-export function sandboxedArgv(argv: string[], user: string): string[] {
-  const sudo = findOnPath(["sudo"]) ?? "sudo";
-  const envBin = findOnPath(["env"]) ?? "/usr/bin/env";
-  return [
-    sudo,
-    "-n",
-    "-u",
-    user,
-    envBin,
-    "-i",
-    `HOME=/home/${user}`,
-    `PATH=${SANDBOX_PATH}`,
-    "TERM=xterm",
-    ...argv,
-  ];
-}
-
-export function sandboxSpawnEnv(): NodeJS.ProcessEnv {
-  return { PATH: process.env.PATH ?? SANDBOX_PATH };
-}
 
 const KILL_GRACE_MS = 400;
 const GROUP_REAP_POLL_MS = 25;
@@ -117,10 +87,8 @@ export function runProcessGroup(opts: {
   signal?: AbortSignal;
   appendStdout?: boolean;
   onStart?: (pgid: number) => void;
-  user?: string;
 }): Promise<SpawnResult> {
-  const argv = opts.user !== undefined ? sandboxedArgv(opts.argv, opts.user) : opts.argv;
-  const [file, ...args] = argv;
+  const [file, ...args] = opts.argv;
   if (file === undefined) {
     return Promise.resolve({ code: 127, timedOut: false, aborted: false });
   }
@@ -128,7 +96,7 @@ export function runProcessGroup(opts: {
   return new Promise((resolve) => {
     const child = spawn(file, args, {
       cwd: opts.cwd,
-      env: opts.user !== undefined ? sandboxSpawnEnv() : process.env,
+      env: process.env,
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });

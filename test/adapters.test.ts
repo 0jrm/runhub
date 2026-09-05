@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CURSOR_MODEL } from "../src/domain.js";
 import { agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
-import { prependPath, tempDir, writeBin } from "./helpers.js";
+import { tempDir, writeBin } from "./helpers.js";
 
 test("cursor argv pins Grok 4.6 medium, --force, and omits the prompt", () => {
   const argv = agentArgv({
@@ -124,72 +124,4 @@ sleep 999
     () => process.kill(-pgid, 0),
     (err: unknown) => (err as NodeJS.ErrnoException).code === "ESRCH",
   );
-});
-
-test("user option runs sudo -n -u env -i and drops SSH_AUTH_SOCK GH_TOKEN GIT_ASKPASS", async () => {
-  const dir = tempDir("sudo-user");
-  const envLog = join(dir, "child.env");
-  const argvLog = join(dir, "sudo.argv");
-  const inner = writeBin(
-    dir,
-    "inner-agent",
-    `#!/bin/sh
-printenv > ${JSON.stringify(envLog)}
-`,
-  );
-  writeBin(
-    dir,
-    "sudo",
-    `#!/bin/sh
-printf '%s\\n' "$*" > ${JSON.stringify(argvLog)}
-printenv > ${JSON.stringify(join(dir, "sudo.env"))}
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    env|*/env) exec "$@" ;;
-  esac
-  shift
-done
-exit 127
-`,
-  );
-  const prevPath = process.env.PATH;
-  const prevSock = process.env.SSH_AUTH_SOCK;
-  const prevGh = process.env.GH_TOKEN;
-  const prevAsk = process.env.GIT_ASKPASS;
-  process.env.PATH = prependPath(dir);
-  process.env.SSH_AUTH_SOCK = "/run/user/1000/gcr/ssh";
-  process.env.GH_TOKEN = "secret-token";
-  process.env.GIT_ASKPASS = "askpass";
-  try {
-    const result = await runProcessGroup({
-      argv: [inner],
-      cwd: dir,
-      timeoutMs: 5000,
-      user: "runhub-agent",
-    });
-    assert.equal(result.code, 0);
-    const sudoArgv = readFileSync(argvLog, "utf8");
-    assert.match(sudoArgv, /-n -u runhub-agent /);
-    assert.match(sudoArgv, /HOME=\/home\/runhub-agent/);
-    assert.match(sudoArgv, /PATH=\/usr\/local\/bin:\/usr\/bin:\/bin/);
-    assert.match(sudoArgv, /TERM=xterm/);
-    const childEnv = readFileSync(envLog, "utf8");
-    assert.doesNotMatch(childEnv, /SSH_AUTH_SOCK/);
-    assert.doesNotMatch(childEnv, /GH_TOKEN/);
-    assert.doesNotMatch(childEnv, /GIT_ASKPASS/);
-    assert.match(childEnv, /^HOME=\/home\/runhub-agent$/m);
-    const sudoEnv = readFileSync(join(dir, "sudo.env"), "utf8");
-    assert.doesNotMatch(sudoEnv, /SSH_AUTH_SOCK/);
-    assert.doesNotMatch(sudoEnv, /GH_TOKEN/);
-    assert.doesNotMatch(sudoEnv, /GIT_ASKPASS/);
-  } finally {
-    if (prevPath === undefined) delete process.env.PATH;
-    else process.env.PATH = prevPath;
-    if (prevSock === undefined) delete process.env.SSH_AUTH_SOCK;
-    else process.env.SSH_AUTH_SOCK = prevSock;
-    if (prevGh === undefined) delete process.env.GH_TOKEN;
-    else process.env.GH_TOKEN = prevGh;
-    if (prevAsk === undefined) delete process.env.GIT_ASKPASS;
-    else process.env.GIT_ASKPASS = prevAsk;
-  }
 });

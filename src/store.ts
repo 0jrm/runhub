@@ -1,12 +1,10 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync, chmodSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { listOutcome, parseEventJson, toRunId, type Event, type RunId, type RunView } from "./domain.js";
 import { reduce } from "./reduce.js";
 import { removeRunWorktree } from "./git.js";
-import { AGENT_USER } from "./adapters.js";
 
 export function dataRoot(): string {
   const xdg = process.env.XDG_DATA_HOME;
@@ -56,12 +54,7 @@ export function newRunId(): RunId {
 
 export function appendEvent(runId: RunId, event: Event): void {
   const dir = runDir(runId);
-  mkdirSync(dir, { recursive: true, mode: 0o2770 });
-  try {
-    chmodSync(dir, 0o2770);
-  } catch {
-    // some filesystems reject setgid
-  }
+  mkdirSync(dir, { recursive: true });
   appendFileSync(join(dir, "events.jsonl"), `${JSON.stringify(event)}\n`, "utf8");
 }
 
@@ -172,46 +165,6 @@ export function resolveRunId(arg: string | undefined): RunId {
   const latest = latestRunId();
   if (!latest) throw new Error("no runs stored");
   return latest;
-}
-
-const KILL_GRACE_MS = 400;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function signalPgid(pgid: number, signal: "SIGTERM" | "SIGKILL", user: string | undefined): void {
-  try {
-    process.kill(-pgid, signal);
-  } catch {
-    // gone, or EPERM for the other uid in the group
-  }
-  if (user !== undefined) {
-    const flag = signal === "SIGTERM" ? "-TERM" : "-KILL";
-    spawnSync("pkill", [flag, "-g", String(pgid), "-u", user], { encoding: "utf8" });
-  }
-}
-
-export async function killRun(view: RunView): Promise<void> {
-  const user = view.sandbox === "user" ? AGENT_USER : undefined;
-  if (view.agentPgid !== undefined) {
-    signalPgid(view.agentPgid, "SIGTERM", user);
-    await delay(KILL_GRACE_MS);
-    signalPgid(view.agentPgid, "SIGKILL", user);
-  }
-  if (view.pipelinePid !== undefined) {
-    try {
-      process.kill(view.pipelinePid, "SIGTERM");
-    } catch {
-      // already gone
-    }
-    await delay(KILL_GRACE_MS);
-    try {
-      process.kill(view.pipelinePid, "SIGKILL");
-    } catch {
-      // already gone
-    }
-  }
 }
 
 function cleanupRun(runId: RunId): void {

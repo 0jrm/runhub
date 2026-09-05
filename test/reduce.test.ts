@@ -90,13 +90,6 @@ test("REJECT review does not change a passing outcome", () => {
   assert.equal(outcome(view), "pass");
 });
 
-test("listOutcome marks a killed run as killed", () => {
-  const view = reduceJsonl(readFileSync(fixture, "utf8"));
-  view.killed = true;
-  view.status = "running";
-  assert.equal(listOutcome(view), "killed");
-});
-
 test("listOutcome marks unfinished runs past timeout as stale", () => {
   const view = reduceJsonl(readFileSync(fixture, "utf8"));
   view.status = "running";

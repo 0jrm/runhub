@@ -15,8 +15,7 @@
     "dist",
     "README.md",
     "GROKBOT.md",
-    "LICENSE",
-    "scripts/setup-agent-user.sh"
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
@@ -25,7 +24,6 @@
     "build": "tsc && chmod +x dist/cli.js",
     "prepack": "npm run build",
     "test": "rm -rf dist-test && tsc && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
-    "contract": "rm -rf dist-test && tsc && tsc -p tsconfig.test.json && node dist-test/test/contract.js",
     "pack:tarball": "npm pack"
   },
   "devDependencies": {

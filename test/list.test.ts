@@ -95,37 +95,6 @@ test("listRuns shows project basename, outcome, and stale", () => {
     assert.equal(stale?.project, "markitdown");
     assert.equal(stale?.outcome, "stale");
     assert.equal(byId.get(untestedId)?.outcome, "changed-untested");
-    const killedId = toRunId("run-list-killed1");
-    mkdirSync(runDir(killedId), { recursive: true });
-    writeFileSync(
-      join(runDir(killedId), "events.jsonl"),
-      [
-        {
-          kind: "run_created",
-          ts: "2026-01-04T00:00:00.000Z",
-          runId: killedId,
-          prompt: "p",
-          cwd: "/tmp/app",
-          timeoutMs: 1000,
-        },
-        {
-          kind: "pipeline_started",
-          ts: "2026-01-04T00:00:01.000Z",
-          runId: killedId,
-          pid: 1,
-        },
-        {
-          kind: "run_killed",
-          ts: "2026-01-04T00:00:02.000Z",
-          runId: killedId,
-        },
-      ]
-        .map((e) => JSON.stringify(e))
-        .join("\n") + "\n",
-      "utf8",
-    );
-    const listed2 = listRuns(Date.parse("2026-01-01T00:00:05.000Z"));
-    assert.equal(listed2.find((r) => r.runId === killedId)?.outcome, "killed");
     assert.equal(
       tallyLine(listed),
       "last 30: 0 pass, 1 fail, 1 changed-untested, 0 no-changes, 0 running",

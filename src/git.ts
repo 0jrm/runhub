@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { SPAWN_MAX_BUFFER, type DiffRange } from "./domain.js";
-import { AGENT_GROUP } from "./adapters.js";
 
 export const IGNORED_DEP_NAMES = ["node_modules", ".venv", "venv", "target", ".tox"] as const;
 
@@ -46,43 +45,6 @@ export function revParseHead(cwd: string): string {
 
 function isIgnored(cwd: string, name: string): boolean {
   return git(cwd, ["check-ignore", "-q", "--", name]).status === 0;
-}
-
-function groupGid(name: string): number | undefined {
-  const r = spawnSync("getent", ["group", name], { encoding: "utf8" });
-  if (r.status !== 0) return undefined;
-  const gid = Number(r.stdout.trim().split(":")[2]);
-  return Number.isInteger(gid) ? gid : undefined;
-}
-
-function isGroupWritable(path: string, gid: number): boolean {
-  try {
-    const st = statSync(path);
-    return st.gid === gid && (st.mode & 0o020) !== 0;
-  } catch {
-    return false;
-  }
-}
-
-export function depGroupWarnings(repo: string, groupName = AGENT_GROUP): string[] {
-  const gid = groupGid(groupName);
-  const lines: string[] = [];
-  for (const name of IGNORED_DEP_NAMES) {
-    const src = join(repo, name);
-    if (!existsSync(src)) continue;
-    if (!isIgnored(repo, name)) continue;
-    if (gid === undefined || !isGroupWritable(src, gid)) {
-      lines.push(`deps: ${name} not group-writable, tests may fail`);
-    }
-  }
-  return lines;
-}
-
-export function makeGroupWritable(tree: string, groupName = AGENT_GROUP): void {
-  spawnSync("chmod", ["-R", "g+w", tree], { encoding: "utf8" });
-  if (groupGid(groupName) !== undefined) {
-    spawnSync("chgrp", ["-R", groupName, tree], { encoding: "utf8" });
-  }
 }
 
 function linkIgnoredDeps(repo: string, tree: string): void {

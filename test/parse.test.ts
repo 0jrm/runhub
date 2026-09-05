@@ -29,7 +29,7 @@ test("parseEvent accepts run_created defaults and verify_recorded", () => {
   assert.equal(v.kind, "verify_recorded");
 });
 
-test("parseEvent accepts pgid_recorded, push_recorded, run_killed, and deps_warned", () => {
+test("parseEvent accepts pgid_recorded and push_recorded", () => {
   const pgid = parseEvent({
     kind: "pgid_recorded",
     ts: "2026-09-04T12:00:00.000Z",
@@ -46,17 +46,4 @@ test("parseEvent accepts pgid_recorded, push_recorded, run_killed, and deps_warn
     branch: "runhub/11111111-1111-1111-1111-111111111111",
   });
   assert.equal(pushed.kind, "push_recorded");
-  const killed = parseEvent({
-    kind: "run_killed",
-    ts: "2026-09-04T12:00:00.000Z",
-    runId: "11111111-1111-1111-1111-111111111111",
-  });
-  assert.equal(killed.kind, "run_killed");
-  const deps = parseEvent({
-    kind: "deps_warned",
-    ts: "2026-09-04T12:00:00.000Z",
-    runId: "11111111-1111-1111-1111-111111111111",
-    lines: ["deps: node_modules not group-writable, tests may fail"],
-  });
-  assert.equal(deps.kind, "deps_warned");
 });
