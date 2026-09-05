@@ -4,8 +4,10 @@ import { TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type DiffRange, type Verif
 import { diffStatText } from "./git.js";
 import { runProcessGroup } from "./adapters.js";
 
-export function detectTestCmd(cwd: string, override?: string): string | undefined {
-  if (override !== undefined && override.length > 0) return override;
+export type DetectedTest = { cmd: string; cwd: string };
+
+export function detectTestCmd(cwd: string, override?: string): DetectedTest | undefined {
+  if (override !== undefined && override.length > 0) return { cmd: override, cwd };
   const pkgPath = join(cwd, "package.json");
   if (existsSync(pkgPath)) {
     try {
@@ -14,7 +16,7 @@ export function detectTestCmd(cwd: string, override?: string): string | undefine
         const scripts = (raw as { scripts?: unknown }).scripts;
         if (typeof scripts === "object" && scripts !== null) {
           const test = (scripts as { test?: unknown }).test;
-          if (typeof test === "string" && test.trim().length > 0) return "npm test";
+          if (typeof test === "string" && test.trim().length > 0) return { cmd: "npm test", cwd };
         }
       }
     } catch {}
@@ -22,9 +24,10 @@ export function detectTestCmd(cwd: string, override?: string): string | undefine
   const makePath = join(cwd, "Makefile");
   if (existsSync(makePath)) {
     const text = readFileSync(makePath, "utf8");
-    if (/^test\s*:/m.test(text)) return "make test";
+    if (/^test\s*:/m.test(text)) return { cmd: "make test", cwd };
   }
-  if (findPytest(cwd)) return "pytest";
+  const pytestDir = findPytest(cwd);
+  if (pytestDir !== undefined) return { cmd: "pytest", cwd: pytestDir };
   return undefined;
 }
 
@@ -48,15 +51,17 @@ function hasPytest(dir: string): boolean {
   }
 }
 
-function findPytest(cwd: string): boolean {
-  if (hasPytest(cwd)) return true;
-  let names: string[] = [];
+function listedDirs(dir: string): string[] {
   try {
-    names = readdirSync(cwd);
+    return readdirSync(dir).sort();
   } catch {
-    return false;
+    return [];
   }
-  for (const name of names) {
+}
+
+function findPytest(cwd: string): string | undefined {
+  if (hasPytest(cwd)) return cwd;
+  for (const name of listedDirs(cwd)) {
     if (SKIP_WALK.has(name)) continue;
     const child = join(cwd, name);
     try {
@@ -64,19 +69,14 @@ function findPytest(cwd: string): boolean {
     } catch {
       continue;
     }
-    if (hasPytest(child)) return true;
+    if (hasPytest(child)) return child;
     if (name !== "packages") continue;
-    let pkgs: string[] = [];
-    try {
-      pkgs = readdirSync(child);
-    } catch {
-      continue;
-    }
-    for (const pkg of pkgs) {
-      if (hasPytest(join(child, pkg))) return true;
+    for (const pkg of listedDirs(child)) {
+      const dir = join(child, pkg);
+      if (hasPytest(dir)) return dir;
     }
   }
-  return false;
+  return undefined;
 }
 
 export async function runVerify(opts: {
@@ -88,17 +88,17 @@ export async function runVerify(opts: {
 }): Promise<VerifyResult> {
   const baseSha = opts.range.from;
   const diffStat = diffStatText(opts.cwd, opts.range);
-  const testCmd = detectTestCmd(opts.cwd, opts.testCmdOverride);
-  if (testCmd === undefined) {
+  const detected = detectTestCmd(opts.cwd, opts.testCmdOverride);
+  if (detected === undefined) {
     return { baseSha, diffStat, testTail: "no test command" };
   }
   if (opts.signal?.aborted) {
-    return { baseSha, diffStat, testCmd, testExit: 130, testTail: "aborted" };
+    return { baseSha, diffStat, testCmd: detected.cmd, testExit: 130, testTail: "aborted" };
   }
   const errPath = `${opts.testOutPath}.err`;
   const result = await runProcessGroup({
-    argv: ["sh", "-c", testCmd],
-    cwd: opts.cwd,
+    argv: ["sh", "-c", detected.cmd],
+    cwd: detected.cwd,
     stdoutPath: opts.testOutPath,
     stderrPath: errPath,
     timeoutMs: TEST_TIMEOUT_MS,
@@ -111,7 +111,7 @@ export async function runVerify(opts: {
   return {
     baseSha,
     diffStat,
-    testCmd,
+    testCmd: detected.cmd,
     testExit,
     testTail: tailBytes(combined, TEST_TAIL_BYTES).text,
   };

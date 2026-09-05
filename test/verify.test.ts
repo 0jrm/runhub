@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SPAWN_MAX_BUFFER } from "../src/domain.js";
-import { detectTestCmd } from "../src/verify.js";
+import { detectTestCmd, runVerify } from "../src/verify.js";
+import { gitRepo, headSha, prependPath, tempDir, withEnv, writeBin } from "./helpers.js";
 
 test("spawnSync maxBuffer is 64 MB", () => {
   assert.equal(SPAWN_MAX_BUFFER, 64 * 1024 * 1024);
@@ -20,10 +21,10 @@ test("detectTestCmd requires scripts.test or a Makefile test target", () => {
   writeFileSync(join(root, "Makefile"), "all:\n\ttrue\n");
   assert.equal(detectTestCmd(root), undefined);
   writeFileSync(join(root, "Makefile"), "test:\n\ttrue\n");
-  assert.equal(detectTestCmd(root), "make test");
+  assert.deepEqual(detectTestCmd(root), { cmd: "make test", cwd: root });
   writeFileSync(join(root, "package.json"), '{"scripts":{"test":"node --test"}}\n');
-  assert.equal(detectTestCmd(root), "npm test");
-  assert.equal(detectTestCmd(root, "pytest -q"), "pytest -q");
+  assert.deepEqual(detectTestCmd(root), { cmd: "npm test", cwd: root });
+  assert.deepEqual(detectTestCmd(root, "pytest -q"), { cmd: "pytest -q", cwd: root });
 });
 
 test("detectTestCmd finds pytest from pyproject, deps, or a tests/ dir", () => {
@@ -32,12 +33,12 @@ test("detectTestCmd finds pytest from pyproject, deps, or a tests/ dir", () => {
   writeFileSync(join(root, "pyproject.toml"), "[project]\nname = \"x\"\n");
   assert.equal(detectTestCmd(root), undefined);
   writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
-  assert.equal(detectTestCmd(root), "pytest");
+  assert.deepEqual(detectTestCmd(root), { cmd: "pytest", cwd: root });
   writeFileSync(join(root, "pyproject.toml"), "dependencies = [\"pytest\"]\n");
-  assert.equal(detectTestCmd(root), "pytest");
+  assert.deepEqual(detectTestCmd(root), { cmd: "pytest", cwd: root });
   writeFileSync(join(root, "pyproject.toml"), "[project]\nname = \"x\"\n");
   mkdirSync(join(root, "tests"));
-  assert.equal(detectTestCmd(root), "pytest");
+  assert.deepEqual(detectTestCmd(root), { cmd: "pytest", cwd: root });
 });
 
 test("detectTestCmd reads markitdown's pyproject and finds pytest from the git root", () => {
@@ -48,7 +49,41 @@ test("detectTestCmd reads markitdown's pyproject and finds pytest from the git r
   writeFileSync(join(isolated, "pyproject.toml"), readFileSync(py, "utf8"));
   assert.equal(detectTestCmd(isolated), undefined);
   mkdirSync(join(isolated, "tests"));
-  assert.equal(detectTestCmd(isolated), "pytest");
-  assert.equal(detectTestCmd(pkg), "pytest");
-  assert.equal(detectTestCmd("/home/jrm22n/markitdown"), "pytest");
+  assert.deepEqual(detectTestCmd(isolated), { cmd: "pytest", cwd: isolated });
+  assert.deepEqual(detectTestCmd(pkg), { cmd: "pytest", cwd: pkg });
+  assert.deepEqual(detectTestCmd("/home/jrm22n/markitdown"), {
+    cmd: "pytest",
+    cwd: pkg,
+  });
+});
+
+test("detectTestCmd uses packages/x as cwd when git root has no manifest", () => {
+  const root = mkdtempSync(join(tmpdir(), "runhub-mono-"));
+  const pkg = join(root, "packages", "x");
+  mkdirSync(join(pkg, "tests"), { recursive: true });
+  writeFileSync(join(pkg, "pyproject.toml"), "[project]\nname = \"x\"\n");
+  assert.deepEqual(detectTestCmd(root), { cmd: "pytest", cwd: pkg });
+});
+
+test("runVerify runs pytest with the pyproject directory as cwd", async () => {
+  const root = tempDir("pytest-cwd");
+  const pkg = join(root, "packages", "x");
+  gitRepo(root, [
+    { path: "packages/x/pyproject.toml", body: "[project]\nname = \"x\"\n" },
+    { path: "packages/x/tests/test_ok.py", body: "def test_ok():\n    assert True\n" },
+  ]);
+  const sha = headSha(root);
+  await withEnv(async () => {
+    const binDir = tempDir("pytest-bin");
+    writeBin(binDir, "pytest", "#!/bin/sh\npwd > ran-from.txt\nexit 0\n");
+    process.env.PATH = prependPath(binDir);
+    const verify = await runVerify({
+      cwd: root,
+      range: { from: sha, to: sha },
+      testOutPath: join(root, "verify.out"),
+    });
+    assert.equal(verify.testCmd, "pytest");
+    assert.equal(verify.testExit, 0);
+    assert.equal(readFileSync(join(pkg, "ran-from.txt"), "utf8").trim(), pkg);
+  });
 });
