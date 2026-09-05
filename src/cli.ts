@@ -14,8 +14,13 @@ import {
   type PromptSource,
   type ReviewKind,
 } from "./domain.js";
+<<<<<<< HEAD
 import { loadProjects, NotInProjectsError, resolveRunCwd } from "./projects.js";
 import { appendEvent, listRuns, loadView, prune, reportPath, resolveRunId, runDir, tallyLine } from "./store.js";
+=======
+import { loadProjects, resolveRunCwd } from "./projects.js";
+import { appendEvent, killRun, listRuns, loadView, prune, reportPath, resolveRunId, runDir, tallyLine } from "./store.js";
+>>>>>>> 2a50b49 (runhub: Implement SANDBOX.md option a. Read SANDBOX.md, src/adapters)
 import { executePipeline, prepareRun } from "./pipeline.js";
 
 const USAGE = `runhub <command>
@@ -24,6 +29,7 @@ Commands:
   run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
   wait <runId> [--timeout <duration>]
   merge <runId>
+  kill <runId>
   status [runId]
   report [runId]
   list
@@ -142,13 +148,14 @@ function assertGitCwd(cwd: string): void {
   }
 }
 
-type Command = "run" | "wait" | "merge" | "status" | "report" | "list" | "prune" | "help" | "__exec";
+type Command = "run" | "wait" | "merge" | "kill" | "status" | "report" | "list" | "prune" | "help" | "__exec";
 
 function parseCommand(raw: string | undefined): Command | undefined {
   switch (raw) {
     case "run":
     case "wait":
     case "merge":
+    case "kill":
     case "status":
     case "report":
     case "list":
@@ -197,6 +204,7 @@ async function main(argv: string[]): Promise<number> {
         typecheckCmd: resolved.typecheck,
         lintCmd: resolved.lint,
         remote: resolved.remote,
+        sandbox: resolved.sandbox,
         agent,
         model: flags.get("model") ?? defaultModel(agent),
         review,
@@ -262,6 +270,15 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(r.stdout);
       process.stderr.write(r.stderr);
       return r.status ?? 1;
+    }
+    case "kill": {
+      const { positional } = parseFlags(rest, new Set());
+      const id = resolveRunId(positional[0]);
+      const view = loadView(id);
+      await killRun(view);
+      appendEvent(id, { kind: "run_killed", ts: nowIso(), runId: id });
+      process.stdout.write(`killed ${id}\n`);
+      return 0;
     }
     case "status": {
       const { positional } = parseFlags(rest, new Set());

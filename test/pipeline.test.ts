@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+<<<<<<< HEAD
 import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+=======
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+>>>>>>> 2a50b49 (runhub: Implement SANDBOX.md option a. Read SANDBOX.md, src/adapters)
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
@@ -546,6 +550,41 @@ test("a successful push without gh prints pushed: remote/branch", async () => {
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /push_recorded/);
     assert.doesNotMatch(events, /pr_opened/);
+    prune(0);
+  });
+});
+
+test("sandbox user warns when node_modules is not group-writable by runhub", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work, [{ path: ".gitignore", body: "node_modules\n" }]);
+    mkdirSync(join(work, "node_modules"), { recursive: true });
+    chmodSync(join(work, "node_modules"), 0o700);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    writeBin(
+      binDir,
+      "sudo",
+      `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    env|*/env) exec "$@" ;;
+  esac
+  shift
+done
+exit 127
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      timeoutMs: 15_000,
+      sandbox: "user",
+    });
+    assert.match(result.markdown, /^sandbox: runhub-agent$/m);
+    assert.match(result.markdown, /^deps: node_modules not group-writable, tests may fail$/m);
     prune(0);
   });
 });

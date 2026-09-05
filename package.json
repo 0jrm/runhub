@@ -15,7 +15,8 @@
     "dist",
     "README.md",
     "GROKBOT.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/setup-agent-user.sh"
   ],
   "engines": {
     "node": ">=20"
