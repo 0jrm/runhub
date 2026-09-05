@@ -1,50 +1,52 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { captureQuota } from "./quota.js";
-import { htmlPath, listRuns, loadView, prune, resolveRunId } from "./store.js";
-import { inspectText, renderMarkdown } from "./report.js";
-import { runPipeline, type PipelineOpts } from "./pipeline.js";
-import { PROVIDERS, type Provider } from "./domain.js";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { DEFAULT_TIMEOUT_MS } from "./domain.js";
+import { listRuns, loadView, prune, reportPath, resolveRunId } from "./store.js";
+import { runPipeline } from "./pipeline.js";
 
 const USAGE = `runhub <command>
 
 Commands:
-  run --cwd <dir> --prompt <text> [--execute cursor|claude|grok] [--review none|claude|grok] [--report grok|none] [--dry-run] [--cheap]
+  run --cwd <dir> --prompt <text> [--timeout <duration>] [--test-cmd <cmd>]
   status [runId]
   report [runId]
-  inspect [runId]
-  html [runId]
   list
   prune --keep <n>
-  quota
 `;
 
-type FlagMap = Map<string, string | boolean>;
+const RUN_FLAGS = new Set(["cwd", "prompt", "timeout", "test-cmd"]);
+const PRUNE_FLAGS = new Set(["keep"]);
 
-function parseFlags(args: string[]): { positional: string[]; flags: FlagMap } {
+type FlagMap = Map<string, string>;
+
+function parseFlags(args: string[], allowed: Set<string>): { positional: string[]; flags: FlagMap } {
   const positional: string[] = [];
   const flags: FlagMap = new Map();
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === undefined) break;
-    if (a === "--dry-run" || a === "--cheap") {
-      flags.set(a.slice(2), true);
-      continue;
-    }
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
+      let key: string;
+      let value: string | undefined;
       if (eq !== -1) {
-        flags.set(a.slice(2, eq), a.slice(eq + 1));
-        continue;
-      }
-      const key = a.slice(2);
-      const next = args[i + 1];
-      if (next === undefined || next.startsWith("--")) {
-        flags.set(key, true);
+        key = a.slice(2, eq);
+        value = a.slice(eq + 1);
       } else {
-        flags.set(key, next);
+        key = a.slice(2);
+        if (!allowed.has(key)) throw new Error(`unknown flag --${key}`);
+        const next = args[i + 1];
+        if (next === undefined || next.startsWith("--")) {
+          throw new Error(`flag --${key} requires a value`);
+        }
+        value = next;
         i += 1;
       }
+      if (!allowed.has(key)) throw new Error(`unknown flag --${key}`);
+      flags.set(key, value);
       continue;
     }
     positional.push(a);
@@ -52,65 +54,40 @@ function parseFlags(args: string[]): { positional: string[]; flags: FlagMap } {
   return { positional, flags };
 }
 
-function flagString(flags: FlagMap, name: string): string | undefined {
-  const v = flags.get(name);
-  if (v === undefined || typeof v === "boolean") return undefined;
-  return v;
+export function parseTimeout(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_TIMEOUT_MS;
+  const m = raw.match(/^(\d+)(ms|s|m|h)?$/);
+  if (!m?.[1]) throw new Error("invalid --timeout (use 30m, 90s, 1h, or seconds)");
+  const n = Number(m[1]);
+  const unit = m[2];
+  if (unit === "ms") return n;
+  if (unit === "m") return n * 60 * 1000;
+  if (unit === "h") return n * 60 * 60 * 1000;
+  return n * 1000;
 }
 
-function asProvider(value: string, allowed: readonly string[]): Provider {
-  if (allowed.includes(value) && (value === "cursor" || value === "claude" || value === "grok")) {
-    return value;
+function assertGitCwd(cwd: string): void {
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    throw new Error(`--cwd is not a directory: ${cwd}`);
   }
-  throw new Error(`invalid provider ${value}`);
+  const r = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (r.status !== 0 || r.stdout.trim() !== "true") {
+    throw new Error(`--cwd is not a git repo: ${cwd}`);
+  }
 }
 
-function parseRunOpts(flags: FlagMap): PipelineOpts {
-  const cwdRaw = flagString(flags, "cwd");
-  const prompt = flagString(flags, "prompt");
-  if (cwdRaw === undefined || prompt === undefined) {
-    throw new Error("run requires --cwd and --prompt");
-  }
-  const executeRaw = flagString(flags, "execute") ?? "cursor";
-  const reviewRaw = flagString(flags, "review") ?? "claude";
-  const reportRaw = flagString(flags, "report") ?? "grok";
-  if (reviewRaw !== "none" && reviewRaw !== "claude" && reviewRaw !== "grok") {
-    throw new Error("--review must be none, claude, or grok");
-  }
-  if (reportRaw !== "grok" && reportRaw !== "none") {
-    throw new Error("--report must be grok or none");
-  }
-  return {
-    cwd: resolve(cwdRaw),
-    prompt,
-    execute: asProvider(executeRaw, PROVIDERS),
-    review: reviewRaw,
-    report: reportRaw,
-    dryRun: flags.get("dry-run") === true,
-    cheap: flags.get("cheap") === true,
-  };
-}
+type Command = "run" | "status" | "report" | "list" | "prune" | "help";
 
-type Command =
-  | "run"
-  | "status"
-  | "report"
-  | "inspect"
-  | "html"
-  | "list"
-  | "prune"
-  | "quota";
-
-function parseCommand(raw: string | undefined): Command | "help" | undefined {
+function parseCommand(raw: string | undefined): Command | undefined {
   switch (raw) {
     case "run":
     case "status":
     case "report":
-    case "inspect":
-    case "html":
     case "list":
     case "prune":
-    case "quota":
     case "help":
       return raw;
     default:
@@ -134,39 +111,42 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   const rest = args.slice(1);
-  const { positional, flags } = parseFlags(rest);
 
   switch (command) {
     case "run": {
-      const opts = parseRunOpts(flags);
-      const result = await runPipeline(opts);
+      const { flags } = parseFlags(rest, RUN_FLAGS);
+      const cwdRaw = flags.get("cwd");
+      const prompt = flags.get("prompt");
+      if (cwdRaw === undefined || prompt === undefined) {
+        throw new Error("run requires --cwd and --prompt");
+      }
+      const cwd = resolve(cwdRaw);
+      assertGitCwd(cwd);
+      const result = await runPipeline({
+        cwd,
+        prompt,
+        timeoutMs: parseTimeout(flags.get("timeout")),
+        testCmd: flags.get("test-cmd"),
+      });
       process.stdout.write(result.markdown);
       if (!result.markdown.endsWith("\n")) process.stdout.write("\n");
-      process.stdout.write(`runhub: ${result.runId} ${result.runPath}\n`);
       return result.failed ? 1 : 0;
     }
     case "status": {
+      const { positional } = parseFlags(rest, new Set());
       const id = resolveRunId(positional[0]);
       const view = loadView(id);
       process.stdout.write(`${view.runId} ${view.status}${view.summary ? ` ${view.summary}` : ""}\n`);
       return 0;
     }
     case "report": {
+      const { positional } = parseFlags(rest, new Set());
       const id = resolveRunId(positional[0]);
-      process.stdout.write(renderMarkdown(loadView(id)));
-      return 0;
-    }
-    case "inspect": {
-      const id = resolveRunId(positional[0]);
-      process.stdout.write(inspectText(loadView(id)));
-      return 0;
-    }
-    case "html": {
-      const id = resolveRunId(positional[0]);
-      process.stdout.write(`${htmlPath(id)}\n`);
+      process.stdout.write(readFileSync(reportPath(id), "utf8"));
       return 0;
     }
     case "list": {
+      parseFlags(rest, new Set());
       const runs = listRuns();
       if (runs.length === 0) {
         process.stdout.write("(no runs)\n");
@@ -178,20 +158,13 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "prune": {
-      const keepRaw = flagString(flags, "keep");
+      const { flags } = parseFlags(rest, PRUNE_FLAGS);
+      const keepRaw = flags.get("keep");
       if (keepRaw === undefined) throw new Error("prune requires --keep <n>");
       const keep = Number(keepRaw);
       if (!Number.isInteger(keep) || keep < 0) throw new Error("--keep must be a non-negative integer");
       const result = prune(keep);
       process.stderr.write(`deleted ${result.deleted.length}, kept ${result.kept.length}\n`);
-      return 0;
-    }
-    case "quota": {
-      const snap = await captureQuota();
-      process.stdout.write("Quota probes (probe, not billing API)\n");
-      for (const p of snap.providers) {
-        process.stdout.write(`${p.provider}\t${p.probe}\t${p.detail.replaceAll("\n", " ")}\n`);
-      }
       return 0;
     }
     default: {
@@ -201,13 +174,16 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-main(process.argv).then(
-  (code) => {
-    process.exit(code);
-  },
-  (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`${message}\n`);
-    process.exit(1);
-  },
-);
+const entry = process.argv[1];
+if (entry !== undefined && fileURLToPath(import.meta.url) === resolve(entry)) {
+  main(process.argv).then(
+    (code) => {
+      process.exit(code);
+    },
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`${message}\n`);
+      process.exit(1);
+    },
+  );
+}

@@ -1,12 +1,10 @@
 # runhub
 
-`runhub` is the one command Grok Local Execution should run and wait on. It records a Run as an append-only event log, calls installed agent CLIs, prints a markdown report on stdout, and stores artifacts under `$XDG_DATA_HOME/runhub` (or `~/.local/share/runhub`).
-
-It does not drive the Cursor IDE. It does not merge IDE, CLI, or cloud sessions into Cursor's Agents Window. That product cannot do that.
+You talk to Grok on your phone. Grok runs one command on this laptop. The laptop runs one coding agent, checks git and tests, then prints a short report.
 
 ## Install
 
-From GitHub:
+You need Node 20+.
 
 ```bash
 git clone https://github.com/0jrm/runhub.git
@@ -16,67 +14,33 @@ npm run build
 npm install -g .
 ```
 
-Share the repo or a tarball. Recipients need Node 20+. From a clone:
+## Everyday use
+
+Point at a git repo. Say the job. Wait.
 
 ```bash
-npm install
-npm run build
-npm install -g .
+runhub run --cwd /home/jrm22n/some-project --prompt "fix the login bug"
 ```
 
-To ship a file:
+That starts Cursor Agent with Grok 4.6 Medium. The prompt goes on stdin, not argv. After the agent exits, runhub records `git status --porcelain` and `git diff --stat HEAD`, then runs the project test command (`npm test`, `pytest`, or `make test`, or `--test-cmd`).
+
+Stdout is the phone report, in this order. Result. Files changed. Tests. The agent's last message. Errors. Raw agent output stays in `agent.stdout` on disk.
 
 ```bash
-npm pack
-```
-
-That writes `runhub-0.1.0.tgz` (gitignored). Install it with:
-
-```bash
-npm install -g ./runhub-0.1.0.tgz
-```
-
-Or run without a global install:
-
-```bash
-npx --yes ./runhub-0.1.0.tgz run --cwd /abs/dir --prompt "task"
-```
-
-## Grokbot one-liner
-
-Approve this command and wait until it exits:
-
-```bash
-runhub run --cwd /ABS/PATH/TO/REPO --prompt "<task>"
-```
-
-Stdout is the markdown report, plus a last line `runhub: <runId> <path>`. Logs go to stderr. Defaults are execute=cursor, review=claude, report=grok. Missing binaries skip that step and show up in the report.
-
-See `GROKBOT.md` for the paste-ready instruction.
-
-## Commands
-
-```
-runhub run --cwd <dir> --prompt <text> [--execute cursor|claude|grok] [--review none|claude|grok] [--report grok|none] [--dry-run] [--cheap]
-runhub status [runId]
-runhub report [runId]
-runhub inspect [runId]
-runhub html [runId]
+runhub status
+runhub report
 runhub list
-runhub prune --keep <n>
-runhub quota
+runhub prune --keep 20
 ```
 
-`--dry-run` probes PATH binaries, writes a run with a quota snapshot, and still prints `report.md`. It does not invoke agents.
+Logs live in `~/.local/share/runhub/runs/`.
 
-`--cheap` still calls Cursor, Claude, and Grok, but keeps each hop tiny: Cursor ask mode (no edits), Claude `--max-turns 1`, Grok already single-turn. Use it for a ping, not real coding.
+Optional flags are `--timeout 30m` (that is already the default) and `--test-cmd "npm test"`.
 
-Quota lines are PATH probes with an 8s timeout, not a billing API.
+Do not set `RUNHUB_YOLO=1` unless you want the agent to approve its own tool use.
 
-`RUNHUB_YOLO=1` is required before runhub passes `--force`, `--yolo`, `--always-approve`, or `--dangerously-skip-permissions`.
+Paste `GROKBOT.md` into Grok as a custom instruction.
 
-## Storage
+## If you are sharing this
 
-Each run lives in `runs/<runId>/` with `events.jsonl`, `summary.json`, `report.md`, and `report.html`. The event log is the source of truth. Agent transcripts in `~/.cursor/projects/**/agent-transcripts` (and Claude/Grok session dirs) are not copied.
-
-`runhub prune --keep 20` deletes oldest run directories beyond 20.
+The public repo is https://github.com/0jrm/runhub

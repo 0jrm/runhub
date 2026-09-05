@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseEventJson, STEP_LOG_BYTES, tailBytes, toRunId, type Event, type RunId, type RunView } from "./domain.js";
+import { parseEventJson, toRunId, type Event, type RunId, type RunView } from "./domain.js";
 import { reduce } from "./reduce.js";
 
 export function dataRoot(): string {
@@ -19,6 +19,18 @@ export function runDir(runId: RunId): string {
   return join(runsRoot(), runId);
 }
 
+export function agentStdoutPath(runId: RunId): string {
+  return join(runDir(runId), "agent.stdout");
+}
+
+export function promptPath(runId: RunId): string {
+  return join(runDir(runId), "prompt.txt");
+}
+
+export function reportPath(runId: RunId): string {
+  return join(runDir(runId), "report.md");
+}
+
 export function newRunId(): RunId {
   return toRunId(randomUUID());
 }
@@ -26,12 +38,7 @@ export function newRunId(): RunId {
 export function appendEvent(runId: RunId, event: Event): void {
   const dir = runDir(runId);
   mkdirSync(dir, { recursive: true });
-  let toWrite = event;
-  if (event.kind === "step_chunk") {
-    const capped = tailBytes(event.text, STEP_LOG_BYTES);
-    toWrite = capped.truncated ? { ...event, text: capped.text } : event;
-  }
-  appendFileSync(join(dir, "events.jsonl"), `${JSON.stringify(toWrite)}\n`, "utf8");
+  appendFileSync(join(dir, "events.jsonl"), `${JSON.stringify(event)}\n`, "utf8");
 }
 
 export function readEvents(runId: RunId): Event[] {
@@ -50,15 +57,11 @@ export function loadView(runId: RunId): RunView {
   return reduce(readEvents(runId));
 }
 
-export function writeArtifacts(
-  runId: RunId,
-  files: { summary: unknown; markdown: string; html: string },
-): void {
+export function writeArtifacts(runId: RunId, files: { summary: unknown; markdown: string }): void {
   const dir = runDir(runId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "summary.json"), `${JSON.stringify(files.summary, null, 2)}\n`, "utf8");
   writeFileSync(join(dir, "report.md"), files.markdown, "utf8");
-  writeFileSync(join(dir, "report.html"), files.html, "utf8");
 }
 
 export type ListedRun = { runId: RunId; createdAt: string; status: RunView["status"] };
@@ -109,8 +112,4 @@ export function prune(keep: number): { kept: RunId[]; deleted: RunId[] } {
     deleted.push(r.runId);
   }
   return { kept: listRuns().map((r) => r.runId), deleted };
-}
-
-export function htmlPath(runId: RunId): string {
-  return join(runDir(runId), "report.html");
 }

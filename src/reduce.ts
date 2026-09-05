@@ -1,25 +1,4 @@
-import {
-  assertNever,
-  parseEventJson,
-  toRunId,
-  type Event,
-  type RunView,
-  type StepView,
-} from "./domain.js";
-
-function emptyStep(ev: Extract<Event, { kind: "step_started" }>): StepView {
-  return {
-    id: ev.step.id,
-    parentId: ev.step.parentId,
-    persona: ev.step.persona,
-    provider: ev.step.provider,
-    argv: ev.step.argv,
-    status: { kind: "running", startedAt: ev.ts },
-    stdout: "",
-    stderr: "",
-    truncated: false,
-  };
-}
+import { assertNever, parseEventJson, toRunId, type Event, type RunView } from "./domain.js";
 
 export function reduce(events: readonly Event[]): RunView {
   if (events.length === 0) {
@@ -36,49 +15,32 @@ export function reduce(events: readonly Event[]): RunView {
     cwd: first.cwd,
     createdAt: first.ts,
     status: "queued",
-    steps: [],
     errors: [],
-    dryRun: false,
   };
-
-  const steps = new Map<string, StepView>();
 
   for (const ev of events) {
     switch (ev.kind) {
       case "run_created":
         break;
-      case "quota_snapshot":
-        view.quota = ev.snapshot;
-        break;
-      case "step_started": {
-        const step = emptyStep(ev);
-        steps.set(step.id, step);
+      case "step_started":
         view.status = "running";
+        if (ev.step.id === "agent") view.agentArgv = ev.step.argv;
         break;
-      }
-      case "step_chunk": {
-        const step = steps.get(ev.stepId);
-        if (!step) break;
-        if (ev.stream === "stdout") step.stdout += ev.text;
-        else step.stderr += ev.text;
-        break;
-      }
-      case "step_finished": {
-        const step = steps.get(ev.stepId);
-        if (!step) break;
-        step.exitCode = ev.exitCode;
-        if (ev.truncated) step.truncated = true;
-        if (ev.exitCode === 0) {
-          step.status = { kind: "done", endedAt: ev.ts };
-        } else {
-          step.status = {
-            kind: "failed",
-            endedAt: ev.ts,
-            error: `exit ${ev.exitCode}`,
-          };
+      case "step_finished":
+        if (ev.stepId === "agent") {
+          view.agentExit = ev.exitCode;
+          if (ev.timedOut) view.agentTimedOut = true;
         }
         break;
-      }
+      case "verify_recorded":
+        view.verify = {
+          porcelain: ev.porcelain,
+          diffStat: ev.diffStat,
+          testTail: ev.testTail,
+          ...(ev.testCmd === undefined ? {} : { testCmd: ev.testCmd }),
+          ...(ev.testExit === undefined ? {} : { testExit: ev.testExit }),
+        };
+        break;
       case "error":
         view.errors.push(
           ev.stepId === undefined
@@ -96,8 +58,6 @@ export function reduce(events: readonly Event[]): RunView {
     }
   }
 
-  view.steps = [...steps.values()];
-  view.dryRun = view.steps.length === 0 && view.quota !== undefined;
   return view;
 }
 
