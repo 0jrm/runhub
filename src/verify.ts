@@ -1,13 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type DiffRange, type VerifyResult } from "./domain.js";
 import { diffStatText } from "./git.js";
 import { runProcessGroup } from "./adapters.js";
 
-export type DetectedTest = { cmd: string; cwd: string };
+export type DetectedCmd = { cmd: string; cwd: string };
 
-export function detectTestCmd(cwd: string, override?: string): DetectedTest | undefined {
+export function detectTestCmd(cwd: string, override?: string): DetectedCmd | undefined {
   if (override !== undefined && override.length > 0) return { cmd: override, cwd };
   const pkgPath = join(cwd, "package.json");
   if (existsSync(pkgPath)) {
@@ -115,40 +115,131 @@ function findPytest(cwd: string): string | undefined {
   return undefined;
 }
 
+function npmScript(cwd: string, name: "typecheck" | "lint"): DetectedCmd | undefined {
+  const pkgPath = join(cwd, "package.json");
+  if (!existsSync(pkgPath)) return undefined;
+  try {
+    const raw: unknown = JSON.parse(readFileSync(pkgPath, "utf8"));
+    if (typeof raw !== "object" || raw === null) return undefined;
+    const scripts = (raw as { scripts?: unknown }).scripts;
+    if (typeof scripts !== "object" || scripts === null) return undefined;
+    const value = (scripts as Record<string, unknown>)[name];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return { cmd: `npm run ${name}`, cwd };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function tomlHasTable(dir: string, table: string): boolean {
+  const pyPath = join(dir, "pyproject.toml");
+  if (!existsSync(pyPath)) return false;
+  try {
+    return new RegExp(`^\\[tool\\.${table}\\]`, "m").test(readFileSync(pyPath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function detectInTree(
+  cwd: string,
+  override: string | undefined,
+  npmName: "typecheck" | "lint",
+  toml: { table: string; cmd: string },
+): DetectedCmd | undefined {
+  if (override !== undefined && override.length > 0) return { cmd: override, cwd };
+  const fromPkg = npmScript(cwd, npmName);
+  if (fromPkg !== undefined) return fromPkg;
+  if (tomlHasTable(cwd, toml.table)) return { cmd: toml.cmd, cwd };
+  const pytestDir = findPytest(cwd);
+  if (pytestDir !== undefined && pytestDir !== cwd && tomlHasTable(pytestDir, toml.table)) {
+    return { cmd: toml.cmd, cwd: pytestDir };
+  }
+  return undefined;
+}
+
+export function detectTypecheckCmd(cwd: string, override?: string): DetectedCmd | undefined {
+  return detectInTree(cwd, override, "typecheck", { table: "mypy", cmd: "mypy" });
+}
+
+export function detectLintCmd(cwd: string, override?: string): DetectedCmd | undefined {
+  return detectInTree(cwd, override, "lint", { table: "ruff", cmd: "ruff check" });
+}
+
+async function runShellCmd(opts: {
+  cmd: string;
+  cwd: string;
+  outPath: string;
+  signal?: AbortSignal;
+}): Promise<{ exit: number; tail: string }> {
+  if (opts.signal?.aborted) return { exit: 130, tail: "aborted" };
+  const errPath = `${opts.outPath}.err`;
+  const result = await runProcessGroup({
+    argv: ["sh", "-c", opts.cmd],
+    cwd: opts.cwd,
+    stdoutPath: opts.outPath,
+    stderrPath: errPath,
+    timeoutMs: TEST_TIMEOUT_MS,
+    signal: opts.signal,
+  });
+  const out = existsSync(opts.outPath) ? readFileSync(opts.outPath, "utf8") : "";
+  const err = existsSync(errPath) ? readFileSync(errPath, "utf8") : "";
+  const exit = result.aborted ? 130 : result.timedOut ? 124 : (result.code ?? 1);
+  return { exit, tail: tailBytes(`${out}${err}`, TEST_TAIL_BYTES).text };
+}
+
 export async function runVerify(opts: {
   cwd: string;
   range: DiffRange;
   testOutPath: string;
   testCmdOverride?: string;
+  typecheckOverride?: string;
+  lintOverride?: string;
   signal?: AbortSignal;
 }): Promise<VerifyResult> {
   const baseSha = opts.range.from;
   const diffStat = diffStatText(opts.cwd, opts.range);
   const detected = detectTestCmd(opts.cwd, opts.testCmdOverride);
-  if (detected === undefined) {
-    return { baseSha, diffStat, testTail: "no test command" };
+  const typecheck = detectTypecheckCmd(opts.cwd, opts.typecheckOverride);
+  const lint = detectLintCmd(opts.cwd, opts.lintOverride);
+
+  let result: VerifyResult = { baseSha, diffStat, testTail: "no test command" };
+  if (detected !== undefined) {
+    const ran = await runShellCmd({
+      cmd: detected.cmd,
+      cwd: detected.cwd,
+      outPath: opts.testOutPath,
+      signal: opts.signal,
+    });
+    result = {
+      baseSha,
+      diffStat,
+      testCmd: detected.cmd,
+      testExit: ran.exit,
+      testTail: ran.tail,
+    };
   }
-  if (opts.signal?.aborted) {
-    return { baseSha, diffStat, testCmd: detected.cmd, testExit: 130, testTail: "aborted" };
+
+  const dir = dirname(opts.testOutPath);
+  if (typecheck !== undefined) {
+    const ran = await runShellCmd({
+      cmd: typecheck.cmd,
+      cwd: typecheck.cwd,
+      outPath: join(dir, "typecheck.out"),
+      signal: opts.signal,
+    });
+    result = { ...result, typecheckCmd: typecheck.cmd, typecheckExit: ran.exit };
   }
-  const errPath = `${opts.testOutPath}.err`;
-  const result = await runProcessGroup({
-    argv: ["sh", "-c", detected.cmd],
-    cwd: detected.cwd,
-    stdoutPath: opts.testOutPath,
-    stderrPath: errPath,
-    timeoutMs: TEST_TIMEOUT_MS,
-    signal: opts.signal,
-  });
-  const out = existsSync(opts.testOutPath) ? readFileSync(opts.testOutPath, "utf8") : "";
-  const err = existsSync(errPath) ? readFileSync(errPath, "utf8") : "";
-  const combined = `${out}${err}`;
-  const testExit = result.aborted ? 130 : result.timedOut ? 124 : (result.code ?? 1);
-  return {
-    baseSha,
-    diffStat,
-    testCmd: detected.cmd,
-    testExit,
-    testTail: tailBytes(combined, TEST_TAIL_BYTES).text,
-  };
+  if (lint !== undefined) {
+    const ran = await runShellCmd({
+      cmd: lint.cmd,
+      cwd: lint.cwd,
+      outPath: join(dir, "lint.out"),
+      signal: opts.signal,
+    });
+    result = { ...result, lintCmd: lint.cmd, lintExit: ran.exit };
+  }
+  return result;
 }

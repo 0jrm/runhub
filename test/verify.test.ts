@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SPAWN_MAX_BUFFER } from "../src/domain.js";
-import { detectTestCmd, runVerify } from "../src/verify.js";
+import { detectLintCmd, detectTestCmd, detectTypecheckCmd, runVerify } from "../src/verify.js";
 import { gitRepo, headSha, restrictedPath, tempDir, withEnv, writeBin } from "./helpers.js";
 
 test("spawnSync maxBuffer is 64 MB", () => {
@@ -25,6 +25,19 @@ test("detectTestCmd requires scripts.test or a Makefile test target", () => {
   writeFileSync(join(root, "package.json"), '{"scripts":{"test":"node --test"}}\n');
   assert.deepEqual(detectTestCmd(root), { cmd: "npm test", cwd: root });
   assert.deepEqual(detectTestCmd(root, "pytest -q"), { cmd: "pytest -q", cwd: root });
+});
+
+test("detectTypecheckCmd and detectLintCmd read package.json and pyproject", () => {
+  const root = mkdtempSync(join(tmpdir(), "runhub-checks-"));
+  assert.equal(detectTypecheckCmd(root), undefined);
+  writeFileSync(join(root, "package.json"), '{"scripts":{"typecheck":"tsc","lint":"eslint ."}}\n');
+  assert.deepEqual(detectTypecheckCmd(root), { cmd: "npm run typecheck", cwd: root });
+  assert.deepEqual(detectLintCmd(root), { cmd: "npm run lint", cwd: root });
+  writeFileSync(join(root, "pyproject.toml"), "[tool.mypy]\n[tool.ruff]\n");
+  const py = mkdtempSync(join(tmpdir(), "runhub-pycheck-"));
+  writeFileSync(join(py, "pyproject.toml"), "[tool.mypy]\n[tool.ruff]\n");
+  assert.deepEqual(detectTypecheckCmd(py), { cmd: "mypy", cwd: py });
+  assert.deepEqual(detectLintCmd(py), { cmd: "ruff check", cwd: py });
 });
 
 test("detectTestCmd finds pytest from pyproject, deps, or a tests/ dir", () => {

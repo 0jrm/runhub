@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ParseError } from "./domain.js";
 
-export type Project = { name: string; path: string; test?: string };
+export type Project = { name: string; path: string; test?: string; typecheck?: string; lint?: string };
 
 export function projectsTomlPath(): string {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "runhub", "projects.toml");
@@ -17,7 +17,7 @@ export function loadProjects(): Project[] {
 
 export function parseProjects(text: string): Project[] {
   const projects: Project[] = [];
-  let current: { name: string; path?: string; test?: string } | undefined;
+  let current: { name: string; path?: string; test?: string; typecheck?: string; lint?: string } | undefined;
 
   const flush = (): void => {
     if (current === undefined) return;
@@ -30,6 +30,10 @@ export function parseProjects(text: string): Project[] {
     }
     const project: Project = { name, path: current.path };
     if (current.test !== undefined && current.test.length > 0) project.test = current.test;
+    if (current.typecheck !== undefined && current.typecheck.length > 0) {
+      project.typecheck = current.typecheck;
+    }
+    if (current.lint !== undefined && current.lint.length > 0) project.lint = current.lint;
     projects.push(project);
     current = undefined;
   };
@@ -60,23 +64,29 @@ export function parseProjects(text: string): Project[] {
     const value = parseTomlValue(trimmed.slice(eq + 1));
     if (key === "path") current.path = value;
     else if (key === "test") current.test = value;
+    else if (key === "typecheck") current.typecheck = value;
+    else if (key === "lint") current.lint = value;
   }
   flush();
   return projects;
 }
 
-export function resolveRunCwd(
-  raw: string,
-  projects: readonly Project[],
-): { cwd: string; test?: string } {
+export type ResolvedCwd = { cwd: string; test?: string; typecheck?: string; lint?: string };
+
+function withProjectCmds(cwd: string, project: Project): ResolvedCwd {
+  const out: ResolvedCwd = { cwd };
+  if (project.test !== undefined) out.test = project.test;
+  if (project.typecheck !== undefined) out.typecheck = project.typecheck;
+  if (project.lint !== undefined) out.lint = project.lint;
+  return out;
+}
+
+export function resolveRunCwd(raw: string, projects: readonly Project[]): ResolvedCwd {
   const named = projects.find((p) => p.name === raw);
-  if (named !== undefined) {
-    const cwd = resolve(named.path);
-    return named.test === undefined ? { cwd } : { cwd, test: named.test };
-  }
+  if (named !== undefined) return withProjectCmds(resolve(named.path), named);
   const cwd = resolve(raw);
   const matched = projects.find((p) => pathsEqual(cwd, resolve(p.path)));
-  if (matched?.test !== undefined) return { cwd, test: matched.test };
+  if (matched !== undefined) return withProjectCmds(cwd, matched);
   return { cwd };
 }
 

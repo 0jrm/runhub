@@ -1,11 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import {
   TEST_EXCERPT_LINES,
+  classifyExit,
   classifyTest,
+  formatUsageLine,
   lastLines,
   outcome,
   outcomeLabel,
   type RunView,
+  type TestKind,
   type Verdict,
 } from "./domain.js";
 
@@ -65,21 +69,79 @@ function tookLine(view: RunView): string | undefined {
   const ms = Date.parse(view.finishedAt) - Date.parse(view.createdAt);
   if (!Number.isFinite(ms) || ms < 0) return undefined;
   const seconds = Math.round(ms / 1000);
-  return `took ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `took ${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function checkLine(label: string, cmd: string | undefined, exit: number | undefined): string | undefined {
+  const kind = classifyExit(cmd, exit);
+  switch (kind) {
+    case "absent":
+      return undefined;
+    case "missing":
+      return `${label}: ${cmd} (not found on PATH)`;
+    case "passed":
+    case "failed":
+      return `${label}: ${cmd}  exit ${exit ?? "?"}`;
+    default: {
+      const _exhaustive: never = kind;
+      throw new Error(`unhandled check kind: ${String(_exhaustive)}`);
+    }
+  }
+}
+
+function testsBlock(view: RunView): string[] {
+  const verify = view.verify;
+  if (verify === undefined) return ["tests: none"];
+  const lines: string[] = [];
+  const kind: TestKind = classifyTest(verify);
+  switch (kind) {
+    case "absent":
+      lines.push("tests: none");
+      break;
+    case "missing":
+      lines.push(`tests: ${verify.testCmd} (not found on PATH)`);
+      break;
+    case "passed":
+      lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+      break;
+    case "failed":
+      lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+      if (verify.testTail.trim().length > 0) {
+        lines.push(lastLines(verify.testTail, TEST_EXCERPT_LINES));
+      }
+      break;
+    default: {
+      const _exhaustive: never = kind;
+      throw new Error(`unhandled test kind: ${String(_exhaustive)}`);
+    }
+  }
+  if (view.retryAttempt !== undefined) {
+    const after = classifyTest(verify);
+    lines.push(after === "passed" ? `retry: ${view.retryAttempt}, tests then passed` : `retry: ${view.retryAttempt}, still failing`);
+  }
+  const typecheck = checkLine("typecheck", verify.typecheckCmd, verify.typecheckExit);
+  if (typecheck !== undefined) lines.push(typecheck);
+  const lint = checkLine("lint", verify.lintCmd, verify.lintExit);
+  if (lint !== undefined) lines.push(lint);
+  return lines;
 }
 
 export function renderReport(
   view: RunView,
   extras: { agentStdout: string; agentStderr: string },
 ): string {
-  const lines: string[] = [outcomeLabel(outcome(view))];
+  const head = [outcomeLabel(outcome(view)), basename(view.cwd)].filter((s) => s.length > 0);
   const took = tookLine(view);
-  if (took !== undefined) lines.push(took);
+  if (took !== undefined) head.push(took);
+  const lines: string[] = [head.join("  ")];
   lines.push("");
 
   if (view.branch) {
     lines.push(`branch: ${view.branch}`);
-    lines.push(`merge: ${mergeCommand(view.cwd, view.branch)}`);
+    if (view.prUrl !== undefined) lines.push(`pr: ${view.prUrl}`);
+    else lines.push(`merge: ${mergeCommand(view.cwd, view.branch)}`);
     lines.push("");
   }
 
@@ -89,33 +151,7 @@ export function renderReport(
   else lines.push(stat);
 
   lines.push("");
-  const verify = view.verify;
-  if (verify === undefined) {
-    lines.push("tests: none");
-  } else {
-    const kind = classifyTest(verify);
-    switch (kind) {
-      case "absent":
-        lines.push("tests: none");
-        break;
-      case "missing":
-        lines.push(`tests: ${verify.testCmd} (not found on PATH)`);
-        break;
-      case "passed":
-        lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
-        break;
-      case "failed":
-        lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
-        if (verify.testTail.trim().length > 0) {
-          lines.push(lastLines(verify.testTail, TEST_EXCERPT_LINES));
-        }
-        break;
-      default: {
-        const _exhaustive: never = kind;
-        throw new Error(`unhandled test kind: ${String(_exhaustive)}`);
-      }
-    }
-  }
+  lines.push(...testsBlock(view));
 
   lines.push("");
   lines.push("agent:");
@@ -124,6 +160,10 @@ export function renderReport(
     lines.push("");
     lines.push("stderr:");
     lines.push(lastLines(extras.agentStderr, 20));
+  }
+
+  for (const u of view.usages) {
+    lines.push(formatUsageLine(u.inputTokens, u.outputTokens));
   }
 
   if (view.reviewVerdict !== undefined) {

@@ -20,11 +20,19 @@ export function reduce(events: readonly Event[]): RunView {
     review: first.review,
     timeoutMs: first.timeoutMs,
     errors: [],
+    usages: [],
+    ...(first.testCmd === undefined ? {} : { testCmd: first.testCmd }),
+    ...(first.typecheckCmd === undefined ? {} : { typecheckCmd: first.typecheckCmd }),
+    ...(first.lintCmd === undefined ? {} : { lintCmd: first.lintCmd }),
   };
 
   for (const ev of events) {
     switch (ev.kind) {
       case "run_created":
+        break;
+      case "pipeline_started":
+        view.pipelinePid = ev.pid;
+        view.status = "running";
         break;
       case "base_recorded":
         view.baseSha = ev.baseSha;
@@ -51,11 +59,28 @@ export function reduce(events: readonly Event[]): RunView {
           testTail: ev.testTail,
           ...(ev.testCmd === undefined ? {} : { testCmd: ev.testCmd }),
           ...(ev.testExit === undefined ? {} : { testExit: ev.testExit }),
+          ...(ev.typecheckCmd === undefined ? {} : { typecheckCmd: ev.typecheckCmd }),
+          ...(ev.typecheckExit === undefined ? {} : { typecheckExit: ev.typecheckExit }),
+          ...(ev.lintCmd === undefined ? {} : { lintCmd: ev.lintCmd }),
+          ...(ev.lintExit === undefined ? {} : { lintExit: ev.lintExit }),
         };
+        break;
+      case "retry_started":
+        view.retryAttempt = ev.attempt;
+        break;
+      case "usage_recorded":
+        view.usages.push({
+          stepId: ev.stepId,
+          inputTokens: ev.inputTokens,
+          outputTokens: ev.outputTokens,
+        });
         break;
       case "review_recorded":
         view.reviewVerdict = ev.verdict;
         view.reviewBody = ev.body;
+        break;
+      case "pr_opened":
+        view.prUrl = ev.url;
         break;
       case "error":
         view.errors.push(

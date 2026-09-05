@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFile
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { parseTimeout } from "../src/cli.js";
 import { gitRepo, prependPath, tempDir, writeFakeAgent } from "./helpers.js";
@@ -80,7 +80,7 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   }
 });
 
-test("run stdout last line is the runhub trailer", () => {
+test("run prints only the run id and wait prints the report", () => {
   const prevXdg = process.env.XDG_DATA_HOME;
   const xdg = mkdtempSync(join(tmpdir(), "runhub-cli-trail-"));
   const work = mkdtempSync(join(tmpdir(), "runhub-cli-work-"));
@@ -95,14 +95,25 @@ test("run stdout last line is the runhub trailer", () => {
     PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
   };
   try {
+    const started = Date.now();
     const r = spawnSync(
       process.execPath,
       [cli, "run", "--cwd", work, "--prompt", "x", "--timeout", "10s", "--test-cmd", "true"],
       { encoding: "utf8", env },
     );
-    const lines = r.stdout.trimEnd().split("\n");
-    const last = lines[lines.length - 1] ?? "";
-    assert.match(last, /^runhub: [0-9a-f-]{36} \S+report\.md$/);
+    const elapsed = Date.now() - started;
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(elapsed < 2000, `run took ${elapsed}ms`);
+    const idLine = r.stdout.trim();
+    assert.match(idLine, /^runhub: [0-9a-f-]{36}$/);
+    const id = idLine.slice("runhub: ".length);
+    const waited = spawnSync(process.execPath, [cli, "wait", id, "--timeout", "30s"], {
+      encoding: "utf8",
+      env,
+    });
+    assert.equal(waited.status, 0, waited.stderr);
+    assert.match(waited.stdout, /files changed:/);
+    assert.match(waited.stdout, /took /);
   } finally {
     if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdg;
@@ -123,8 +134,8 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
 
   const promptOf = (stdout: string): string => {
     const last = stdout.trimEnd().split("\n").pop() ?? "";
-    const m = last.match(/^runhub: ([0-9a-f-]{36}) /);
-    assert.ok(m?.[1], `missing trailer: ${JSON.stringify(stdout)}`);
+    const m = last.match(/^runhub: ([0-9a-f-]{36})$/);
+    assert.ok(m?.[1], `missing id: ${JSON.stringify(stdout)}`);
     return readFileSync(join(xdg, "runhub", "runs", m[1], "prompt.txt"), "utf8");
   };
 
@@ -156,7 +167,7 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
   assert.match(neither.stderr, /run requires --prompt or --prompt-file/);
 });
 
-test("SIGINT aborts the CLI run and still prints one trailer", async () => {
+test("wait times out with exit 3 while a sleeping agent keeps running", async () => {
   const xdg = mkdtempSync(join(tmpdir(), "runhub-cli-sig-"));
   const work = mkdtempSync(join(tmpdir(), "runhub-cli-sigw-"));
   const binDir = mkdtempSync(join(tmpdir(), "runhub-cli-sigb-"));
@@ -169,28 +180,27 @@ test("SIGINT aborts the CLI run and still prints one trailer", async () => {
     XDG_CONFIG_HOME: xdg,
     PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
   };
-  const child = spawn(
+  const r = spawnSync(
     process.execPath,
     [cli, "run", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
-    { env, stdio: ["ignore", "pipe", "pipe"] },
+    { encoding: "utf8", env },
   );
-  await new Promise((r) => setTimeout(r, 600));
-  child.kill("SIGINT");
-  const stdout = await new Promise<string>((resolve, reject) => {
-    let out = "";
-    child.stdout?.on("data", (b: Buffer) => {
-      out += b.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", () => resolve(out));
+  assert.equal(r.status, 0, r.stderr);
+  const id = r.stdout.trim().slice("runhub: ".length);
+  const waited = spawnSync(process.execPath, [cli, "wait", id, "--timeout", "1s"], {
+    encoding: "utf8",
+    env,
   });
-  const lines = stdout.trimEnd().split("\n");
-  const last = lines[lines.length - 1] ?? "";
-  const m = last.match(/^runhub: ([0-9a-f-]{36}) (\S+report\.md)$/);
-  assert.ok(m?.[1] && m[2], `missing trailer: ${JSON.stringify(stdout)}`);
-  const events = readFileSync(join(xdg, "runhub", "runs", m[1], "events.jsonl"), "utf8");
-  assert.equal(events.split("run_finished").length - 1, 1);
-  assert.doesNotMatch(events, /verify_recorded/);
+  assert.equal(waited.status, 3);
+  assert.equal(waited.stdout.trim(), `still running: ${id}`);
+  const events = readFileSync(join(xdg, "runhub", "runs", id, "events.jsonl"), "utf8");
+  const pidMatch = events.match(/"pid":(\d+)/);
+  assert.ok(pidMatch?.[1], events);
+  try {
+    process.kill(-Number(pidMatch[1]), "SIGKILL");
+  } catch {
+    return;
+  }
 });
 
 test("--cwd accepts a project name and uses that project's test", () => {
@@ -213,9 +223,15 @@ test("--cwd accepts a project name and uses that project's test", () => {
     { encoding: "utf8", env },
   );
   assert.equal(named.status, 0, named.stderr);
-  assert.match(named.stdout, /tests: true {2}exit 0/);
-  assert.doesNotMatch(named.stdout, /npm test/);
-  assert.doesNotMatch(named.stdout, /pytest/);
+  const namedId = named.stdout.trim().slice("runhub: ".length);
+  const namedWait = spawnSync(process.execPath, [cli, "wait", namedId, "--timeout", "30s"], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(namedWait.status, 0, namedWait.stderr);
+  assert.match(namedWait.stdout, /tests: true {2}exit 0/);
+  assert.doesNotMatch(namedWait.stdout, /npm test/);
+  assert.doesNotMatch(namedWait.stdout, /pytest/);
 
   writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "false"\n`);
   const override = spawnSync(
@@ -224,6 +240,69 @@ test("--cwd accepts a project name and uses that project's test", () => {
     { encoding: "utf8", env },
   );
   assert.equal(override.status, 0, override.stderr);
-  assert.match(override.stdout, /tests: true {2}exit 0/);
-  assert.doesNotMatch(override.stdout, /tests: false/);
+  const overrideId = override.stdout.trim().slice("runhub: ".length);
+  const overrideWait = spawnSync(process.execPath, [cli, "wait", overrideId, "--timeout", "30s"], {
+    encoding: "utf8",
+    env,
+  });
+  assert.match(overrideWait.stdout, /tests: true {2}exit 0/);
+  assert.doesNotMatch(overrideWait.stdout, /tests: false/);
 });
+
+test("merge uses gh pr merge when a PR URL was recorded", () => {
+  const xdg = tempDir("cli-merge-xdg");
+  const work = tempDir("cli-merge-work");
+  const binDir = tempDir("cli-merge-bin");
+  gitRepo(work);
+  writeFakeAgent(binDir);
+  const argvLog = join(binDir, "gh-argv.txt");
+  writeFileSync(
+    join(binDir, "gh"),
+    `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+exit 0
+`,
+  );
+  chmodSync(join(binDir, "gh"), 0o755);
+  const env = { ...process.env, XDG_DATA_HOME: xdg, XDG_CONFIG_HOME: xdg, PATH: prependPath(binDir) };
+  mkdirSync(join(xdg, "runhub", "runs", "run-merge01aaaa"), { recursive: true });
+  writeFileSync(
+    join(xdg, "runhub", "runs", "run-merge01aaaa", "events.jsonl"),
+    [
+      {
+        kind: "run_created",
+        ts: "2026-01-01T00:00:00.000Z",
+        runId: "run-merge01aaaa",
+        prompt: "p",
+        cwd: work,
+        timeoutMs: 1000,
+      },
+      {
+        kind: "base_recorded",
+        ts: "2026-01-01T00:00:01.000Z",
+        runId: "run-merge01aaaa",
+        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        branch: "runhub/run-merge01aaaa",
+      },
+      {
+        kind: "pr_opened",
+        ts: "2026-01-01T00:00:02.000Z",
+        runId: "run-merge01aaaa",
+        url: "https://github.com/0jrm/toy/pull/9",
+      },
+      {
+        kind: "run_finished",
+        ts: "2026-01-01T00:00:03.000Z",
+        runId: "run-merge01aaaa",
+        status: "done",
+        summary: "pass",
+      },
+    ]
+      .map((e) => JSON.stringify(e))
+      .join("\n") + "\n",
+  );
+  const merged = spawnSync(process.execPath, [cli, "merge", "run-merge01aaaa"], { encoding: "utf8", env });
+  assert.equal(merged.status, 0, merged.stderr);
+  assert.match(readFileSync(argvLog, "utf8"), /pr merge https:\/\/github.com\/0jrm\/toy\/pull\/9 --squash --delete-branch/);
+});
+

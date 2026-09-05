@@ -16,11 +16,11 @@ export type LandResult =
   | { didCommit: true; sha: string; porcelain: string }
   | { didCommit: false; sha: string; porcelain: string };
 
-function git(cwd: string, args: string[]): { status: number; stdout: string; stderr: string } {
+function git(cwd: string, args: string[], timeoutMs = 30_000): { status: number; stdout: string; stderr: string } {
   const r = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: timeoutMs,
     maxBuffer: SPAWN_MAX_BUFFER,
   });
   return {
@@ -109,4 +109,16 @@ export function diffText(cwd: string, range: DiffRange): string {
 
 export function diffStatText(cwd: string, range: DiffRange): string {
   return gitText(cwd, ["diff", "--stat", `${range.from}..${range.to}`]);
+}
+
+export function originUrl(cwd: string): string | undefined {
+  const r = git(cwd, ["remote", "get-url", "origin"]);
+  if (r.status !== 0) return undefined;
+  const url = r.stdout.trim();
+  return url.length > 0 ? url : undefined;
+}
+
+export function pushBranch(cwd: string, branch: string): { status: number; text: string } {
+  const r = git(cwd, ["push", "-u", "origin", branch], 120_000);
+  return { status: r.status, text: `${r.stdout}${r.stderr}`.trimEnd() };
 }

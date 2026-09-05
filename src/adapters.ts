@@ -85,6 +85,7 @@ export function runProcessGroup(opts: {
   stderrPath?: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  appendStdout?: boolean;
 }): Promise<SpawnResult> {
   const [file, ...args] = opts.argv;
   if (file === undefined) {
@@ -175,14 +176,14 @@ export function runProcessGroup(opts: {
     }
 
     if (opts.stdoutPath !== undefined && child.stdout) {
-      const out = createWriteStream(opts.stdoutPath);
+      const out = createWriteStream(opts.stdoutPath, opts.appendStdout === true ? { flags: "a" } : undefined);
       child.stdout.pipe(out);
     } else {
       child.stdout?.resume();
     }
 
     if (opts.stderrPath !== undefined && child.stderr) {
-      const err = createWriteStream(opts.stderrPath);
+      const err = createWriteStream(opts.stderrPath, opts.appendStdout === true ? { flags: "a" } : undefined);
       child.stderr.pipe(err);
     } else {
       child.stderr?.resume();

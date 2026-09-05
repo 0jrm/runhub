@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { reduceJsonl } from "../src/reduce.js";
 import { extractFinalMessage, mergeCommand, parseReview, renderReport } from "../src/report.js";
+import { extractUsages } from "../src/domain.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test/fixtures/sample.jsonl");
 
@@ -17,7 +18,7 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
     agentStdout: '{"type":"result","result":"patched the test"}\n',
     agentStderr: "",
   });
-  assert.match(md, /^pass\ntook 0m 7s\n\n/);
+  assert.match(md, /^pass  app  took 0m 07s\n\n/);
   assert.match(md, /files changed:\nsrc\/cli.ts \| 2 \+-/);
   assert.match(md, /branch: runhub\/11111111-1111-1111-1111-111111111111/);
   assert.match(md, /merge: git -C '\/tmp\/app' merge runhub\//);
@@ -36,7 +37,7 @@ test("report line one spells out changed-untested", () => {
   v.verify.testCmd = undefined;
   v.verify.testExit = undefined;
   const md = renderReport(v, { agentStdout: "", agentStderr: "" });
-  assert.equal(md.split("\n")[0], "changed, untested");
+  assert.equal(md.split("\n")[0], "changed, untested  app  took 0m 07s");
   assert.match(md, /tests: none/);
 });
 
@@ -57,7 +58,7 @@ test("a missing test binary is changed, untested, not an exit code", () => {
   v.verify.testExit = 127;
   v.verify.testTail = "sh: 1: pytest: not found\n";
   const md = renderReport(v, { agentStdout: "", agentStderr: "" });
-  assert.equal(md.split("\n")[0], "changed, untested");
+  assert.equal(md.split("\n")[0], "changed, untested  app  took 0m 07s");
   assert.match(md, /tests: pytest \(not found on PATH\)/);
   assert.doesNotMatch(md, /exit 127/);
   assert.doesNotMatch(md, /sh: 1: pytest: not found/);
@@ -103,6 +104,22 @@ test("parseReview reads the raw text, not just a result envelope", () => {
   assert.equal(parsed.verdict, "REJECT");
   assert.deepEqual(parsed.extra, ["- bug"]);
   assert.deepEqual(parseReview("").extra, []);
+});
+
+test("REJECT review keeps pass on line one", () => {
+  const v = view();
+  v.reviewVerdict = "REJECT";
+  v.reviewBody = "nope\nREJECT\n";
+  const md = renderReport(v, { agentStdout: "", agentStderr: "" });
+  assert.match(md, /^pass  app  took 0m 07s\n/);
+  assert.match(md, /review: REJECT/);
+});
+
+test("extractUsages reads camelCase and snake_case token fields", () => {
+  const cursor = '{"type":"result","usage":{"inputTokens":20296,"outputTokens":233}}\n';
+  const claude = '{"type":"result","usage":{"input_tokens":1500,"output_tokens":40}}\n';
+  assert.deepEqual(extractUsages(cursor), [{ inputTokens: 20296, outputTokens: 233 }]);
+  assert.deepEqual(extractUsages(claude), [{ inputTokens: 1500, outputTokens: 40 }]);
 });
 
 test("extractFinalMessage keeps the last result and splits a glued sentence", () => {

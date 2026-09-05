@@ -22,7 +22,11 @@ export type Event =
       model: string;
       review: ReviewKind;
       timeoutMs: number;
+      testCmd?: string;
+      typecheckCmd?: string;
+      lintCmd?: string;
     }
+  | { kind: "pipeline_started"; ts: string; runId: string; pid: number }
   | { kind: "base_recorded"; ts: string; runId: string; baseSha: string; branch: string }
   | { kind: "work_committed"; ts: string; runId: string; sha: string }
   | { kind: "step_started"; ts: string; runId: string; step: { id: StepId; argv: string[] } }
@@ -36,8 +40,22 @@ export type Event =
       testCmd?: string;
       testExit?: number;
       testTail: string;
+      typecheckCmd?: string;
+      typecheckExit?: number;
+      lintCmd?: string;
+      lintExit?: number;
+    }
+  | { kind: "retry_started"; ts: string; runId: string; attempt: number }
+  | {
+      kind: "usage_recorded";
+      ts: string;
+      runId: string;
+      stepId: StepId;
+      inputTokens: number;
+      outputTokens: number;
     }
   | { kind: "review_recorded"; ts: string; runId: string; verdict: Verdict; body: string }
+  | { kind: "pr_opened"; ts: string; runId: string; url: string }
   | { kind: "error"; ts: string; runId: string; stepId?: StepId; message: string }
   | { kind: "run_finished"; ts: string; runId: string; status: "done" | "failed"; summary: string };
 
@@ -47,7 +65,13 @@ export type VerifyResult = {
   testCmd?: string;
   testExit?: number;
   testTail: string;
+  typecheckCmd?: string;
+  typecheckExit?: number;
+  lintCmd?: string;
+  lintExit?: number;
 };
+
+export type Usage = { stepId: StepId; inputTokens: number; outputTokens: number };
 
 export type RunError = { ts: string; stepId?: StepId; message: string };
 
@@ -63,6 +87,10 @@ export type RunView = {
   model: string;
   review: ReviewKind;
   timeoutMs: number;
+  testCmd?: string;
+  typecheckCmd?: string;
+  lintCmd?: string;
+  pipelinePid?: number;
   baseSha?: string;
   branch?: string;
   commitSha?: string;
@@ -70,8 +98,11 @@ export type RunView = {
   agentExit?: number;
   agentTimedOut?: boolean;
   verify?: VerifyResult;
+  retryAttempt?: number;
+  usages: Usage[];
   reviewVerdict?: Verdict;
   reviewBody?: string;
+  prUrl?: string;
   errors: RunError[];
 };
 
@@ -97,6 +128,9 @@ export const OUTCOME_TABLE = {
 
 export const TEST_TAIL_BYTES = 4096;
 export const TEST_EXCERPT_LINES = 12;
+export const RETRY_TEST_LINES = 60;
+export const AUTO_PRUNE_KEEP = 30;
+export const DEFAULT_WAIT_MS = 10 * 60 * 1000;
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 export const TEST_TIMEOUT_MS = 10 * 60 * 1000;
 export const SPAWN_MAX_BUFFER = 64 * 1024 * 1024;
@@ -160,9 +194,9 @@ function classifyDiff(verify: VerifyResult): DiffKind {
   return verify.diffStat.trim() === "" ? "empty" : "changed";
 }
 
-export function classifyTest(verify: VerifyResult): TestKind {
-  if (verify.testCmd === undefined) return "absent";
-  switch (verify.testExit) {
+export function classifyExit(cmd: string | undefined, exit: number | undefined): TestKind {
+  if (cmd === undefined) return "absent";
+  switch (exit) {
     case 0:
       return "passed";
     case 126:
@@ -173,11 +207,17 @@ export function classifyTest(verify: VerifyResult): TestKind {
   }
 }
 
+export function classifyTest(verify: VerifyResult): TestKind {
+  return classifyExit(verify.testCmd, verify.testExit);
+}
+
 export function outcome(view: RunView): Outcome {
   if (view.status === "failed" || view.agentTimedOut) return "fail";
   if (view.agentExit !== undefined && view.agentExit !== 0) return "fail";
   if (view.verify === undefined) return "fail";
-  if (view.reviewVerdict === "REJECT") return "fail";
+  if (classifyTest(view.verify) === "failed") return "fail";
+  if (classifyExit(view.verify.typecheckCmd, view.verify.typecheckExit) === "failed") return "fail";
+  if (classifyExit(view.verify.lintCmd, view.verify.lintExit) === "failed") return "fail";
   return OUTCOME_TABLE[classifyDiff(view.verify)][classifyTest(view.verify)];
 }
 
@@ -198,11 +238,54 @@ export function outcomeLabel(result: Outcome): string {
   }
 }
 
-export function listOutcome(view: RunView, now = Date.now()): Outcome | "running" | "stale" {
+export function listOutcome(
+  view: RunView,
+  now = Date.now(),
+  pidLive?: boolean,
+): Outcome | "running" | "stale" {
   if (view.status === "done" || view.status === "failed") return outcome(view);
+  if (pidLive === true) return "running";
+  if (pidLive === false) return "stale";
   const deadline = Date.parse(view.createdAt) + view.timeoutMs;
   if (Number.isFinite(deadline) && now > deadline) return "stale";
   return "running";
+}
+
+export function formatUsageLine(inputTokens: number, outputTokens: number): string {
+  return `usage: ${Math.round(inputTokens / 1000)}k in / ${Math.round(outputTokens / 1000)}k out`;
+}
+
+function tokenField(rec: Record<string, unknown>, camel: string, snake: string): number | undefined {
+  const a = rec[camel];
+  const b = rec[snake];
+  if (typeof a === "number" && Number.isFinite(a)) return a;
+  if (typeof b === "number" && Number.isFinite(b)) return b;
+  return undefined;
+}
+
+export function parseUsageFromJson(obj: unknown): { inputTokens: number; outputTokens: number } | undefined {
+  if (!isRecord(obj)) return undefined;
+  const usage = isRecord(obj.usage) ? obj.usage : obj;
+  const inputTokens = tokenField(usage, "inputTokens", "input_tokens");
+  const outputTokens = tokenField(usage, "outputTokens", "output_tokens");
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  return { inputTokens, outputTokens };
+}
+
+export function extractUsages(raw: string): Array<{ inputTokens: number; outputTokens: number }> {
+  const out: Array<{ inputTokens: number; outputTokens: number }> = [];
+  const slice = raw.length > 256_000 ? raw.slice(raw.length - 256_000) : raw;
+  for (const line of slice.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    try {
+      const parsed = parseUsageFromJson(JSON.parse(t) as unknown);
+      if (parsed !== undefined) out.push(parsed);
+    } catch {
+      continue;
+    }
+  }
+  return out;
 }
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -289,6 +372,18 @@ export function parseEvent(raw: unknown): Event {
           typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
             ? raw.timeoutMs
             : DEFAULT_TIMEOUT_MS,
+        ...(typeof raw.testCmd === "string" && raw.testCmd.length > 0 ? { testCmd: raw.testCmd } : {}),
+        ...(typeof raw.typecheckCmd === "string" && raw.typecheckCmd.length > 0
+          ? { typecheckCmd: raw.typecheckCmd }
+          : {}),
+        ...(typeof raw.lintCmd === "string" && raw.lintCmd.length > 0 ? { lintCmd: raw.lintCmd } : {}),
+      };
+    case "pipeline_started":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        pid: asNumber(raw.pid, "pid"),
       };
     case "base_recorded":
       return {
@@ -331,6 +426,30 @@ export function parseEvent(raw: unknown): Event {
         testTail: asString(raw.testTail, "testTail"),
         ...(typeof raw.testCmd === "string" && raw.testCmd.length > 0 ? { testCmd: raw.testCmd } : {}),
         ...(typeof raw.testExit === "number" && Number.isFinite(raw.testExit) ? { testExit: raw.testExit } : {}),
+        ...(typeof raw.typecheckCmd === "string" && raw.typecheckCmd.length > 0
+          ? { typecheckCmd: raw.typecheckCmd }
+          : {}),
+        ...(typeof raw.typecheckExit === "number" && Number.isFinite(raw.typecheckExit)
+          ? { typecheckExit: raw.typecheckExit }
+          : {}),
+        ...(typeof raw.lintCmd === "string" && raw.lintCmd.length > 0 ? { lintCmd: raw.lintCmd } : {}),
+        ...(typeof raw.lintExit === "number" && Number.isFinite(raw.lintExit) ? { lintExit: raw.lintExit } : {}),
+      };
+    case "retry_started":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        attempt: asNumber(raw.attempt, "attempt"),
+      };
+    case "usage_recorded":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        stepId: asStepId(raw.stepId),
+        inputTokens: asNumber(raw.inputTokens, "inputTokens"),
+        outputTokens: asNumber(raw.outputTokens, "outputTokens"),
       };
     case "review_recorded":
       return {
@@ -339,6 +458,13 @@ export function parseEvent(raw: unknown): Event {
         runId: asNonEmpty(raw.runId, "runId"),
         verdict: asVerdict(raw.verdict),
         body: asString(raw.body, "body"),
+      };
+    case "pr_opened":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        url: asNonEmpty(raw.url, "url"),
       };
     case "error":
       return {

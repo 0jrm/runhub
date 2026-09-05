@@ -1,6 +1,6 @@
 # runhub
 
-You talk to Grok on your phone. Grok runs one command on this laptop. The laptop starts a coding agent in an isolated git worktree, checks the diff against the pre-agent HEAD, runs tests, optionally asks Claude to review, then prints a short report.
+You talk to Grok on your phone. Grok runs one command on this laptop. The laptop starts a coding agent in an isolated git worktree, checks the diff against the pre-agent HEAD, runs tests, optionally asks Claude to review, then writes a short report.
 
 ## Install
 
@@ -16,11 +16,19 @@ npm install -g .
 
 ## Everyday use
 
-Point at a git repo. Say the job. Wait. `--cwd` can be a filesystem path or a name from `~/.config/runhub/projects.toml`. A `test` key in that file wins over detection. `--test-cmd` wins over both.
+Point at a git repo. Say the job. `--cwd` can be a filesystem path or a name from `~/.config/runhub/projects.toml`. Keys in that file are `path`, `test`, `typecheck`, and `lint`. A `test` key wins over detection. `--test-cmd` wins over both.
 
 ```bash
 runhub run --cwd /home/jrm22n/some-project --prompt "fix the login bug"
 ```
+
+That prints `runhub: <runId>` and returns in under two seconds. The pipeline keeps going in the background. Wait for it:
+
+```bash
+runhub wait <runId>
+```
+
+`wait` prints the report when the run finishes. Exit 0 on pass, changed, untested, or no-changes. Exit 1 on fail. If the timeout hits first, it prints `still running: <runId>` and exits 3. The run keeps going. Default wait timeout is 10m.
 
 That starts Cursor Agent with Grok 4.6 Medium in a new worktree on `runhub/<runId>`. The prompt goes on stdin, not argv. `--force` (Cursor) and `--dangerously-skip-permissions` (Claude) are on by default.
 
@@ -35,16 +43,25 @@ When the agent exits, runhub commits whatever it left dirty in the worktree as `
 
 A fresh worktree has no `node_modules`, so runhub symlinks the gitignored `node_modules`, `.venv`, `venv`, `target`, and `.tox` from the real repo into the worktree. `npm test` and `pytest` work in the worktree without an install step. Tests run if `package.json` has `scripts.test` (`npm test`), the Makefile has a `test:` target (`make test`), or a `pyproject.toml` has `[tool.pytest*]`, a `pytest` dependency, or a `tests/` directory next to it. Runhub also looks under `packages/*` for that pyproject and runs tests with that directory as cwd. The command is `.venv/bin/pytest` if that file is executable under the search root, otherwise `python -m pytest` if importable, otherwise `pytest`. Otherwise the report says `tests: none`. Override with `--test-cmd`.
 
+After tests, runhub runs typecheck and lint when the project declares them. It uses `package.json` `scripts.typecheck` and `scripts.lint`, or `[tool.mypy]` / `[tool.ruff]` in pyproject, or the `typecheck` / `lint` keys in `projects.toml`. Each gets a report line. Exit 126 or 127 is `(not found on PATH)` and does not fail the run.
+
+If tests ran and failed and the agent exited 0, runhub runs the same agent once more in that worktree with the test tail, commits, and verifies again.
+
+If the source repo has an `origin` remote, runhub pushes `runhub/<runId>`. If `gh` is on PATH and `gh auth status` succeeds, it opens a PR whose body is `report.md`. The report then has a `pr:` line instead of `merge:`.
+
 ```bash
 runhub run --cwd /home/jrm22n/hycom --agent claude --prompt "add a smoke test"
 runhub run --cwd /home/jrm22n/hycom --review claude --prompt "fix the login bug"
+runhub merge <runId>
 ```
 
 `--agent` is `cursor` or `claude` (default cursor). `--model` overrides the per-agent default. `--review claude` runs after verify, reads the committed diff plus the test tail, and must end with APPROVE or REJECT. The reviewer runs read-only, with no tools.
 
-The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. `fail` means a blocker: a failed run, a timeout, a non-zero agent, a REJECT, or a failing test command.
+`merge` squash-merges the PR when one was opened. Otherwise it runs `git -C <cwd> merge runhub/<runId>`.
 
-Stdout is the phone report. Outcome. How long it took. Branch and merge command. Diff-stat. Tests, with a 12-line excerpt on failure and the full log in `verify.out`. The agent's last message. On a failed agent, the last 20 lines of `agent.stderr`. Review verdict if you asked for one. The last stdout line is `runhub: <runId> <reportPath>` so the phone `full:` link is a real file.
+The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. `fail` means the agent exited non-zero, timed out, or a test, typecheck, or lint command ran and exited non-zero. Review stays on its own line.
+
+The report starts with outcome, project name, and duration. Branch and merge or PR. Diff-stat. Tests, retry, typecheck, lint. The agent's last message. On a failed agent, the last 20 lines of `agent.stderr`. Review verdict if you asked for one. `runhub report <runId>` prints that stored file unchanged.
 
 ```bash
 runhub status
@@ -53,11 +70,11 @@ runhub list
 runhub prune --keep 20
 ```
 
-`list` shows run id, project basename, outcome, and time. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A run still marked running after its timeout shows as stale. `prune` deletes the run dir, the worktree, and the `runhub/<runId>` branch.
+`list` shows run id, project basename, outcome, and time. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A run is `running` only while its pipeline PID is alive. Otherwise an unfinished run is `stale`. `list` ends with a tally of the last 30 runs. Each finished run prunes older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
 
 Logs live in `~/.local/share/runhub/runs/`.
 
-Optional flags: `--timeout 30m` (already the default), `--test-cmd "npm test"`, `--agent`, `--model`, `--review`, `--prompt-file`.
+Optional flags: `--timeout 30m` (already the default), `--test-cmd "npm test"`, `--agent`, `--model`, `--review`, `--prompt-file`. `wait` also takes `--timeout`.
 
 Paste `GROKBOT.md` into Grok as a custom instruction.
 

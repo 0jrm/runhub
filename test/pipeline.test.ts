@@ -191,7 +191,7 @@ print('{"type":"result","result":"installed junk"}')
 
     const result = await runPipeline({ cwd: work, prompt: "install junk", timeoutMs: 15_000 });
 
-    assert.match(result.markdown, /^changed, untested\n/);
+    assert.match(result.markdown, /^changed, untested  /);
     assert.equal(result.failed, false);
 
     const tree = worktreePath(result.runId);
@@ -221,7 +221,7 @@ test("a failing test prints a 12-line excerpt and keeps the full log", async () 
       timeoutMs: 20_000,
     });
 
-    assert.match(result.markdown, /^fail\n/);
+    assert.match(result.markdown, /^fail  /);
     assert.match(result.markdown, /line40/);
     assert.match(result.markdown, /line29/);
     assert.doesNotMatch(result.markdown, /line28/);
@@ -275,7 +275,7 @@ sys.exit(2)
     );
     process.env.PATH = prependPath(binDir);
     const result = await runPipeline({ cwd: work, prompt: "fail", testCmd: "true", timeoutMs: 10_000 });
-    assert.match(result.markdown, /^fail\n/);
+    assert.match(result.markdown, /^fail  /);
     assert.match(result.markdown, /stderr:\nerr5/);
     assert.doesNotMatch(result.markdown, /err4\n/);
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
@@ -297,9 +297,124 @@ test("a missing pytest binary is changed-untested, not fail", async () => {
     process.env.PATH = binDir;
     const result = await runPipeline({ cwd: work, prompt: "edit", timeoutMs: 20_000 });
     assert.equal(result.failed, false);
-    assert.match(result.markdown, /^changed, untested\n/);
+    assert.match(result.markdown, /^changed, untested  /);
     assert.match(result.markdown, /tests: pytest \(not found on PATH\)/);
     assert.doesNotMatch(result.markdown, /exit 12[67]/);
+    prune(0);
+  });
+});
+
+test("tests pass and review REJECT still print pass then review REJECT", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("- a risk")
+print("REJECT")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+    });
+    assert.match(result.markdown, /^pass  /);
+    assert.match(result.markdown, /review: REJECT/);
+    assert.equal(result.failed, false);
+    prune(0);
+  });
+});
+
+test("one retry reruns the agent when tests fail then pass", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+from pathlib import Path
+p = Path(".agent-calls")
+n = int(p.read_text()) + 1 if p.exists() else 1
+p.write_text(str(n))
+Path("STAMP.txt").write_text("n=%s\\n" % n)
+print('{"type":"result","result":"call %s","usage":{"inputTokens":1100,"outputTokens":20}}' % n)
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "fix tests",
+      testCmd: 'test "$(cat .agent-calls)" = 2',
+      timeoutMs: 20_000,
+    });
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.equal(events.split('"retry_started"').length - 1, 1);
+    assert.equal(events.split('"verify_recorded"').length - 1, 2);
+    assert.match(result.markdown, /retry: 1, tests then passed/);
+    assert.match(result.markdown, /usage: 1k in \/ 0k out/);
+    prune(0);
+  });
+});
+
+test("push and gh pr create record argv and replace the merge line", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+exit 0
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({ cwd: work, prompt: "open a pr please", testCmd: "true", timeoutMs: 20_000 });
+    const logged = readFileSync(argvLog, "utf8");
+    assert.match(logged, /auth status/);
+    assert.match(logged, /pr create --head runhub\//);
+    assert.match(logged, /--body-file /);
+    assert.match(result.markdown, /pr: https:\/\/github.com\/0jrm\/toy\/pull\/9/);
+    assert.doesNotMatch(result.markdown, /^merge: /m);
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.match(events, /pr_opened/);
+    prune(0);
+  });
+});
+
+test("typecheck and lint lines are recorded and a missing binary is not fail", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work, [
+      {
+        path: "package.json",
+        body: `${JSON.stringify({ name: "t", scripts: { typecheck: "true", lint: "true" } })}\n`,
+      },
+    ]);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({ cwd: work, prompt: "edit", testCmd: "true", timeoutMs: 20_000 });
+    assert.match(result.markdown, /typecheck: npm run typecheck {2}exit 0/);
+    assert.match(result.markdown, /lint: npm run lint {2}exit 0/);
     prune(0);
   });
 });

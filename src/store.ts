@@ -102,7 +102,7 @@ export function listRuns(now = Date.now()): ListedRun[] {
         runId: id,
         createdAt: view.createdAt,
         project: basename(view.cwd),
-        outcome: listOutcome(view, now),
+        outcome: listOutcome(view, now, pidAlive(view.pipelinePid)),
       });
     } catch {
       continue;
@@ -110,6 +110,35 @@ export function listRuns(now = Date.now()): ListedRun[] {
   }
   out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return out;
+}
+
+export function pidAlive(pid: number | undefined): boolean | undefined {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return undefined;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if (typeof err === "object" && err !== null && "code" in err && err.code === "EPERM") return true;
+    return false;
+  }
+}
+
+export function tallyLine(runs: readonly ListedRun[], n = 30): string {
+  const slice = runs.slice(-n);
+  const counts: Record<"pass" | "fail" | "changed-untested" | "no-changes" | "running", number> = {
+    pass: 0,
+    fail: 0,
+    "changed-untested": 0,
+    "no-changes": 0,
+    running: 0,
+  };
+  for (const r of slice) {
+    const o = r.outcome;
+    if (o === "pass" || o === "fail" || o === "changed-untested" || o === "no-changes" || o === "running") {
+      counts[o] += 1;
+    }
+  }
+  return `last 30: ${counts.pass} pass, ${counts.fail} fail, ${counts["changed-untested"]} changed-untested, ${counts["no-changes"]} no-changes, ${counts.running} running`;
 }
 
 export function latestRunId(): RunId | undefined {

@@ -84,6 +84,12 @@ test("a reduced work_committed sha lands on the view", () => {
   assert.equal(view.commitSha, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 });
 
+test("REJECT review does not change a passing outcome", () => {
+  const view = reduceJsonl(readFileSync(fixture, "utf8"));
+  view.reviewVerdict = "REJECT";
+  assert.equal(outcome(view), "pass");
+});
+
 test("listOutcome marks unfinished runs past timeout as stale", () => {
   const view = reduceJsonl(readFileSync(fixture, "utf8"));
   view.status = "running";

@@ -23,6 +23,18 @@ path = "/tmp/runhub"
   ]);
 });
 
+test("parseProjects reads typecheck and lint keys", () => {
+  const projects = parseProjects(`[hycom]
+path = /tmp/hycom
+test = true
+typecheck = mypy
+lint = "ruff check"
+`);
+  assert.deepEqual(projects, [
+    { name: "hycom", path: "/tmp/hycom", test: "true", typecheck: "mypy", lint: "ruff check" },
+  ]);
+});
+
 test("parseProjects throws on a table with no path or on garbage", () => {
   assert.throws(() => parseProjects("[hycom]\ntest = true\n"), ParseError);
   assert.throws(() => parseProjects("not a toml line\n"), ParseError);
@@ -67,4 +79,9 @@ test("resolveRunCwd matches a project name, then a realpath, else resolve(raw)",
   assert.deepEqual(resolveRunCwd(link, projects), { cwd: resolve(link), test: "true" });
   assert.deepEqual(resolveRunCwd("other", projects), { cwd: resolve("other") });
   assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir }]), { cwd: resolve(dir) });
+  assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir, typecheck: "mypy", lint: "ruff check" }]), {
+    cwd: resolve(dir),
+    typecheck: "mypy",
+    lint: "ruff check",
+  });
 });
