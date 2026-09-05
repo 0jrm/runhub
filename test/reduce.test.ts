@@ -32,6 +32,38 @@ test("outcome is no-changes when diff-stat is empty and tests pass", () => {
   assert.equal(outcome(view), "no-changes");
 });
 
+test("the outcome table covers every diff and test pairing", () => {
+  const view = reduceJsonl(readFileSync(fixture, "utf8"));
+  assert.ok(view.verify);
+  assert.equal(outcome(view), "pass");
+
+  view.verify.testCmd = undefined;
+  view.verify.testExit = undefined;
+  assert.equal(outcome(view), "changed-untested");
+
+  view.verify.diffStat = "";
+  assert.equal(outcome(view), "no-changes");
+
+  view.verify.testCmd = "npm test";
+  view.verify.testExit = 3;
+  assert.equal(outcome(view), "fail");
+});
+
+test("a reduced work_committed sha lands on the view", () => {
+  const text = readFileSync(fixture, "utf8").replace(
+    /^(.*base_recorded.*)$/m,
+    (line) =>
+      `${line}\n${JSON.stringify({
+        kind: "work_committed",
+        ts: "2026-09-04T12:00:03.000Z",
+        runId: "11111111-1111-1111-1111-111111111111",
+        sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      })}`,
+  );
+  const view = reduceJsonl(text);
+  assert.equal(view.commitSha, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+});
+
 test("listOutcome marks unfinished runs past timeout as stale", () => {
   const view = reduceJsonl(readFileSync(fixture, "utf8"));
   view.status = "running";

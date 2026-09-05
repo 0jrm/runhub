@@ -1,9 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SPAWN_MAX_BUFFER, TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type VerifyResult } from "./domain.js";
-import { gitText } from "./git.js";
+import { TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type DiffRange, type VerifyResult } from "./domain.js";
+import { diffStatText } from "./git.js";
 import { runProcessGroup } from "./adapters.js";
-import { spawnSync } from "node:child_process";
 
 export function detectTestCmd(cwd: string, override?: string): string | undefined {
   if (override !== undefined && override.length > 0) return override;
@@ -18,9 +17,7 @@ export function detectTestCmd(cwd: string, override?: string): string | undefine
           if (typeof test === "string" && test.trim().length > 0) return "npm test";
         }
       }
-    } catch {
-      // unreadable package.json: try Makefile next
-    }
+    } catch {}
   }
   const makePath = join(cwd, "Makefile");
   if (existsSync(makePath)) {
@@ -32,21 +29,19 @@ export function detectTestCmd(cwd: string, override?: string): string | undefine
 
 export async function runVerify(opts: {
   cwd: string;
-  baseSha: string;
-  porcelainPath: string;
+  range: DiffRange;
   testOutPath: string;
   testCmdOverride?: string;
   signal?: AbortSignal;
 }): Promise<VerifyResult> {
-  const porcelain = gitText(opts.cwd, ["status", "--porcelain"]);
-  writeFileSync(opts.porcelainPath, porcelain.endsWith("\n") ? porcelain : `${porcelain}\n`, "utf8");
-  const diffStat = gitText(opts.cwd, ["diff", "--stat", opts.baseSha]);
+  const baseSha = opts.range.from;
+  const diffStat = diffStatText(opts.cwd, opts.range);
   const testCmd = detectTestCmd(opts.cwd, opts.testCmdOverride);
   if (testCmd === undefined) {
-    return { baseSha: opts.baseSha, diffStat, testTail: "no test command" };
+    return { baseSha, diffStat, testTail: "no test command" };
   }
   if (opts.signal?.aborted) {
-    return { baseSha: opts.baseSha, diffStat, testCmd, testExit: 130, testTail: "aborted" };
+    return { baseSha, diffStat, testCmd, testExit: 130, testTail: "aborted" };
   }
   const errPath = `${opts.testOutPath}.err`;
   const result = await runProcessGroup({
@@ -62,20 +57,10 @@ export async function runVerify(opts: {
   const combined = `${out}${err}`;
   const testExit = result.aborted ? 130 : result.timedOut ? 124 : (result.code ?? 1);
   return {
-    baseSha: opts.baseSha,
+    baseSha,
     diffStat,
     testCmd,
     testExit,
     testTail: tailBytes(combined, TEST_TAIL_BYTES).text,
   };
-}
-
-export function diffAgainstBase(cwd: string, baseSha: string): string {
-  const r = spawnSync("git", ["diff", `${baseSha}..HEAD`], {
-    cwd,
-    encoding: "utf8",
-    timeout: 30_000,
-    maxBuffer: SPAWN_MAX_BUFFER,
-  });
-  return `${r.stdout ?? ""}${r.stderr ?? ""}`;
 }

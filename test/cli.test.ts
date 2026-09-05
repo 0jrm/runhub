@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { parseTimeout } from "../src/cli.js";
+import { gitRepo, prependPath, tempDir, writeFakeAgent } from "./helpers.js";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "../../dist/cli.js");
 
@@ -17,15 +18,6 @@ test("symlink to dist/cli.js still runs help", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /runhub <command>/);
 });
-
-function gitRepo(dir: string): void {
-  spawnSync("git", ["init"], { cwd: dir, encoding: "utf8" });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
-  writeFileSync(join(dir, "README"), "x\n");
-  spawnSync("git", ["add", "."], { cwd: dir });
-  spawnSync("git", ["commit", "-m", "init"], { cwd: dir });
-}
 
 test("parseTimeout accepts duration and seconds", () => {
   assert.equal(parseTimeout(undefined), 30 * 60 * 1000);
@@ -109,6 +101,53 @@ test("run stdout last line is the runhub trailer", () => {
     if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdg;
   }
+});
+
+test("run takes the prompt from a file or stdin, and needs exactly one source", () => {
+  const xdg = tempDir("cli-prompt-xdg");
+  const work = tempDir("cli-prompt-work");
+  const binDir = tempDir("cli-prompt-bin");
+  gitRepo(work);
+  writeFakeAgent(binDir);
+  const env = { ...process.env, XDG_DATA_HOME: xdg, PATH: prependPath(binDir) };
+  const spec = "line one\nline two\n";
+  const specPath = join(binDir, "spec.md");
+  writeFileSync(specPath, spec);
+  const base = [cli, "run", "--cwd", work, "--timeout", "20s", "--test-cmd", "true"];
+
+  const promptOf = (stdout: string): string => {
+    const last = stdout.trimEnd().split("\n").pop() ?? "";
+    const m = last.match(/^runhub: ([0-9a-f-]{36}) /);
+    assert.ok(m?.[1], `missing trailer: ${JSON.stringify(stdout)}`);
+    return readFileSync(join(xdg, "runhub", "runs", m[1], "prompt.txt"), "utf8");
+  };
+
+  const fromFile = spawnSync(process.execPath, [...base, "--prompt-file", specPath], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(fromFile.status, 0, fromFile.stderr);
+  assert.equal(promptOf(fromFile.stdout), spec);
+
+  const fromStdin = spawnSync(process.execPath, [...base, "--prompt", "-"], {
+    encoding: "utf8",
+    env,
+    input: spec,
+  });
+  assert.equal(fromStdin.status, 0, fromStdin.stderr);
+  assert.equal(promptOf(fromStdin.stdout), spec);
+
+  const both = spawnSync(
+    process.execPath,
+    [...base, "--prompt", "x", "--prompt-file", specPath],
+    { encoding: "utf8", env },
+  );
+  assert.notEqual(both.status, 0);
+  assert.match(both.stderr, /either --prompt or --prompt-file, not both/);
+
+  const neither = spawnSync(process.execPath, base, { encoding: "utf8", env });
+  assert.notEqual(neither.status, 0);
+  assert.match(neither.stderr, /run requires --prompt or --prompt-file/);
 });
 
 test("SIGINT aborts the CLI run and still prints one trailer", async () => {
