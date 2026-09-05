@@ -60,23 +60,19 @@ test("detectTestCmd finds pytest from pyproject, deps, or a tests/ dir", () => {
   }
 });
 
-test("detectTestCmd reads markitdown's pyproject and finds pytest from the git root", () => {
-  const pkg = "/home/jrm22n/markitdown/packages/markitdown";
-  const py = join(pkg, "pyproject.toml");
-  assert.equal(existsSync(py), true, "markitdown pyproject must exist for this test");
+test("detectTestCmd uses packages/markitdown as cwd from a git-root pyproject layout", () => {
   const prev = process.env.PATH;
   process.env.PATH = tempDir("nopy");
   try {
-    const isolated = mkdtempSync(join(tmpdir(), "runhub-mdpy-"));
-    writeFileSync(join(isolated, "pyproject.toml"), readFileSync(py, "utf8"));
-    assert.equal(detectTestCmd(isolated), undefined);
-    mkdirSync(join(isolated, "tests"));
-    assert.deepEqual(detectTestCmd(isolated), { cmd: "pytest", cwd: isolated });
+    const root = mkdtempSync(join(tmpdir(), "runhub-mdpy-"));
+    const pkg = join(root, "packages", "markitdown");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "pyproject.toml"), "[project]\nname = \"markitdown\"\n");
+    assert.equal(detectTestCmd(root), undefined);
+    mkdirSync(join(pkg, "tests"));
+    assert.deepEqual(detectTestCmd(root), { cmd: "pytest", cwd: pkg });
+    writeFileSync(join(pkg, "pyproject.toml"), "[tool.pytest.ini_options]\n");
     assert.deepEqual(detectTestCmd(pkg), { cmd: "pytest", cwd: pkg });
-    assert.deepEqual(detectTestCmd("/home/jrm22n/markitdown"), {
-      cmd: "pytest",
-      cwd: pkg,
-    });
   } finally {
     process.env.PATH = prev;
   }

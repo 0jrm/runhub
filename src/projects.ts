@@ -3,7 +3,14 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ParseError } from "./domain.js";
 
-export type Project = { name: string; path: string; test?: string; typecheck?: string; lint?: string };
+export type Project = {
+  name: string;
+  path: string;
+  test?: string;
+  typecheck?: string;
+  lint?: string;
+  remote?: string;
+};
 
 export function projectsTomlPath(): string {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "runhub", "projects.toml");
@@ -17,7 +24,14 @@ export function loadProjects(): Project[] {
 
 export function parseProjects(text: string): Project[] {
   const projects: Project[] = [];
-  let current: { name: string; path?: string; test?: string; typecheck?: string; lint?: string } | undefined;
+  let current: {
+    name: string;
+    path?: string;
+    test?: string;
+    typecheck?: string;
+    lint?: string;
+    remote?: string;
+  } | undefined;
 
   const flush = (): void => {
     if (current === undefined) return;
@@ -34,6 +48,7 @@ export function parseProjects(text: string): Project[] {
       project.typecheck = current.typecheck;
     }
     if (current.lint !== undefined && current.lint.length > 0) project.lint = current.lint;
+    if (current.remote !== undefined && current.remote.length > 0) project.remote = current.remote;
     projects.push(project);
     current = undefined;
   };
@@ -66,18 +81,26 @@ export function parseProjects(text: string): Project[] {
     else if (key === "test") current.test = value;
     else if (key === "typecheck") current.typecheck = value;
     else if (key === "lint") current.lint = value;
+    else if (key === "remote") current.remote = value;
   }
   flush();
   return projects;
 }
 
-export type ResolvedCwd = { cwd: string; test?: string; typecheck?: string; lint?: string };
+export type ResolvedCwd = {
+  cwd: string;
+  test?: string;
+  typecheck?: string;
+  lint?: string;
+  remote?: string;
+};
 
 function withProjectCmds(cwd: string, project: Project): ResolvedCwd {
   const out: ResolvedCwd = { cwd };
   if (project.test !== undefined) out.test = project.test;
   if (project.typecheck !== undefined) out.typecheck = project.typecheck;
   if (project.lint !== undefined) out.lint = project.lint;
+  if (project.remote !== undefined) out.remote = project.remote;
   return out;
 }
 

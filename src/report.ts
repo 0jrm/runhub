@@ -64,6 +64,37 @@ export function mergeCommand(cwd: string, branch: string): string {
   return `git -C ${posixQuote(cwd)} merge ${branch}`;
 }
 
+function binHeader(label: string, argv: string[] | undefined): string {
+  const bin = argv?.[0];
+  if (bin === undefined || bin.length === 0 || bin.startsWith("(")) return `${label}:`;
+  return `${label}: ${basename(bin)} (${bin})`;
+}
+
+function usageLines(view: RunView): string[] {
+  const lines: string[] = [];
+  let agentSeen = 0;
+  for (const u of view.usages) {
+    switch (u.stepId) {
+      case "agent": {
+        agentSeen += 1;
+        const kind = view.retryAttempt !== undefined && agentSeen > 1 ? "retry" : "agent";
+        lines.push(formatUsageLine(kind, u.inputTokens, u.outputTokens));
+        break;
+      }
+      case "review":
+        lines.push(formatUsageLine("review", u.inputTokens, u.outputTokens));
+        break;
+      case "verify":
+        break;
+      default: {
+        const _exhaustive: never = u.stepId;
+        throw new Error(`unhandled usage step: ${String(_exhaustive)}`);
+      }
+    }
+  }
+  return lines;
+}
+
 function tookLine(view: RunView): string | undefined {
   if (view.finishedAt === undefined) return undefined;
   const ms = Date.parse(view.finishedAt) - Date.parse(view.createdAt);
@@ -140,8 +171,12 @@ export function renderReport(
 
   if (view.branch) {
     lines.push(`branch: ${view.branch}`);
-    if (view.prUrl !== undefined) lines.push(`pr: ${view.prUrl}`);
-    else lines.push(`merge: ${mergeCommand(view.cwd, view.branch)}`);
+    if (view.prUrl !== undefined) {
+      lines.push(`pr: ${view.prUrl}`);
+      lines.push(`merge: runhub merge ${view.runId}`);
+    } else {
+      lines.push(`merge: ${mergeCommand(view.cwd, view.branch)}`);
+    }
     lines.push("");
   }
 
@@ -154,7 +189,7 @@ export function renderReport(
   lines.push(...testsBlock(view));
 
   lines.push("");
-  lines.push("agent:");
+  lines.push(binHeader("agent", view.agentArgv));
   lines.push(extractFinalMessage(extras.agentStdout));
   if (view.agentExit !== undefined && view.agentExit !== 0 && extras.agentStderr.trim().length > 0) {
     lines.push("");
@@ -162,12 +197,11 @@ export function renderReport(
     lines.push(lastLines(extras.agentStderr, 20));
   }
 
-  for (const u of view.usages) {
-    lines.push(formatUsageLine(u.inputTokens, u.outputTokens));
-  }
+  lines.push(...usageLines(view));
 
   if (view.reviewVerdict !== undefined) {
     lines.push("");
+    lines.push(binHeader("review", view.reviewArgv));
     lines.push(`review: ${view.reviewVerdict}`);
     for (const line of parseReview(view.reviewBody ?? "").extra) lines.push(line);
   }

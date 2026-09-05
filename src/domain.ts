@@ -25,6 +25,7 @@ export type Event =
       testCmd?: string;
       typecheckCmd?: string;
       lintCmd?: string;
+      remote?: string;
     }
   | { kind: "pipeline_started"; ts: string; runId: string; pid: number }
   | { kind: "base_recorded"; ts: string; runId: string; baseSha: string; branch: string }
@@ -90,11 +91,13 @@ export type RunView = {
   testCmd?: string;
   typecheckCmd?: string;
   lintCmd?: string;
+  remote?: string;
   pipelinePid?: number;
   baseSha?: string;
   branch?: string;
   commitSha?: string;
   agentArgv?: string[];
+  reviewArgv?: string[];
   agentExit?: number;
   agentTimedOut?: boolean;
   verify?: VerifyResult;
@@ -251,8 +254,17 @@ export function listOutcome(
   return "running";
 }
 
-export function formatUsageLine(inputTokens: number, outputTokens: number): string {
-  return `usage: ${Math.round(inputTokens / 1000)}k in / ${Math.round(outputTokens / 1000)}k out`;
+export function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  return `${Math.round(n / 1000)}k`;
+}
+
+export function formatUsageLine(
+  kind: "agent" | "retry" | "review",
+  inputTokens: number,
+  outputTokens: number,
+): string {
+  return `usage ${kind}: ${formatTokenCount(inputTokens)} in / ${formatTokenCount(outputTokens)} out`;
 }
 
 function tokenField(rec: Record<string, unknown>, camel: string, snake: string): number | undefined {
@@ -377,6 +389,7 @@ export function parseEvent(raw: unknown): Event {
           ? { typecheckCmd: raw.typecheckCmd }
           : {}),
         ...(typeof raw.lintCmd === "string" && raw.lintCmd.length > 0 ? { lintCmd: raw.lintCmd } : {}),
+        ...(typeof raw.remote === "string" && raw.remote.length > 0 ? { remote: raw.remote } : {}),
       };
     case "pipeline_started":
       return {

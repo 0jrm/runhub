@@ -23,15 +23,23 @@ path = "/tmp/runhub"
   ]);
 });
 
-test("parseProjects reads typecheck and lint keys", () => {
+test("parseProjects reads typecheck, lint, and remote keys", () => {
   const projects = parseProjects(`[hycom]
 path = /tmp/hycom
 test = true
 typecheck = mypy
 lint = "ruff check"
+remote = origin
 `);
   assert.deepEqual(projects, [
-    { name: "hycom", path: "/tmp/hycom", test: "true", typecheck: "mypy", lint: "ruff check" },
+    {
+      name: "hycom",
+      path: "/tmp/hycom",
+      test: "true",
+      typecheck: "mypy",
+      lint: "ruff check",
+      remote: "origin",
+    },
   ]);
 });
 
@@ -79,9 +87,10 @@ test("resolveRunCwd matches a project name, then a realpath, else resolve(raw)",
   assert.deepEqual(resolveRunCwd(link, projects), { cwd: resolve(link), test: "true" });
   assert.deepEqual(resolveRunCwd("other", projects), { cwd: resolve("other") });
   assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir }]), { cwd: resolve(dir) });
-  assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir, typecheck: "mypy", lint: "ruff check" }]), {
+  assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir, typecheck: "mypy", lint: "ruff check", remote: "origin" }]), {
     cwd: resolve(dir),
     typecheck: "mypy",
     lint: "ruff check",
+    remote: "origin",
   });
 });

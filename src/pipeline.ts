@@ -20,7 +20,7 @@ import {
 } from "./domain.js";
 import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
 import { runVerify } from "./verify.js";
-import { commitMessage, createRunWorktree, diffText, landDirtyWork, originUrl, pushBranch, type RunWorktree } from "./git.js";
+import { commitMessage, createRunWorktree, diffText, landDirtyWork, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
 import {
   agentStderrPath,
   agentStdoutPath,
@@ -45,6 +45,7 @@ export type PipelineOpts = {
   testCmd?: string;
   typecheckCmd?: string;
   lintCmd?: string;
+  remote?: string;
   agent?: AgentKind;
   model?: string;
   review?: ReviewKind;
@@ -115,6 +116,7 @@ export function prepareRun(opts: PipelineOpts): RunId {
     ...(opts.testCmd === undefined ? {} : { testCmd: opts.testCmd }),
     ...(opts.typecheckCmd === undefined ? {} : { typecheckCmd: opts.typecheckCmd }),
     ...(opts.lintCmd === undefined ? {} : { lintCmd: opts.lintCmd }),
+    ...(opts.remote === undefined ? {} : { remote: opts.remote }),
   });
   return runId;
 }
@@ -124,9 +126,18 @@ function gh(args: string[], cwd: string): { status: number; stdout: string; stde
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string): void {
-  if (originUrl(cwd) === undefined) return;
-  const pushed = pushBranch(worktreePath(runId), branch);
+function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string, remote: string | undefined): void {
+  if (remote === undefined || remote.length === 0) return;
+  if (remoteUrl(cwd, remote) === undefined) {
+    emit(runId, {
+      kind: "error",
+      ts: nowIso(),
+      runId,
+      message: `git remote ${remote} is not configured`,
+    });
+    return;
+  }
+  const pushed = pushBranch(worktreePath(runId), remote, branch);
   if (pushed.status !== 0) {
     emit(runId, {
       kind: "error",
@@ -193,7 +204,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         stderr: agentStderrPath(runId),
       }),
     });
-    if (view.branch !== undefined) maybeOpenPr(runId, view.cwd, view.branch, view.prompt);
+    if (view.branch !== undefined) maybeOpenPr(runId, view.cwd, view.branch, view.prompt, view.remote);
     view = loadView(runId);
     const result = ac.signal.aborted && view.status !== "failed" ? "fail" : outcome(view);
     const status = result === "fail" || ac.signal.aborted ? "failed" : "done";

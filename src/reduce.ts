@@ -24,6 +24,7 @@ export function reduce(events: readonly Event[]): RunView {
     ...(first.testCmd === undefined ? {} : { testCmd: first.testCmd }),
     ...(first.typecheckCmd === undefined ? {} : { typecheckCmd: first.typecheckCmd }),
     ...(first.lintCmd === undefined ? {} : { lintCmd: first.lintCmd }),
+    ...(first.remote === undefined ? {} : { remote: first.remote }),
   };
 
   for (const ev of events) {
@@ -45,6 +46,7 @@ export function reduce(events: readonly Event[]): RunView {
       case "step_started":
         view.status = "running";
         if (ev.step.id === "agent") view.agentArgv = ev.step.argv;
+        if (ev.step.id === "review") view.reviewArgv = ev.step.argv;
         break;
       case "step_finished":
         if (ev.stepId === "agent") {

@@ -328,6 +328,7 @@ print("REJECT")
     });
     assert.match(result.markdown, /^pass  /);
     assert.match(result.markdown, /review: REJECT/);
+    assert.match(result.markdown, /agent: cursor-agent \(/);
     assert.equal(result.failed, false);
     prune(0);
   });
@@ -361,7 +362,8 @@ print('{"type":"result","result":"call %s","usage":{"inputTokens":1100,"outputTo
     assert.equal(events.split('"retry_started"').length - 1, 1);
     assert.equal(events.split('"verify_recorded"').length - 1, 2);
     assert.match(result.markdown, /retry: 1, tests then passed/);
-    assert.match(result.markdown, /usage: 1k in \/ 0k out/);
+    assert.match(result.markdown, /usage agent: 1k in \/ 20 out/);
+    assert.match(result.markdown, /usage retry: 1k in \/ 20 out/);
     prune(0);
   });
 });
@@ -387,15 +389,48 @@ exit 0
 `,
     );
     process.env.PATH = prependPath(binDir);
-    const result = await runPipeline({ cwd: work, prompt: "open a pr please", testCmd: "true", timeoutMs: 20_000 });
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "open a pr please",
+      testCmd: "true",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
     const logged = readFileSync(argvLog, "utf8");
     assert.match(logged, /auth status/);
     assert.match(logged, /pr create --head runhub\//);
     assert.match(logged, /--body-file /);
     assert.match(result.markdown, /pr: https:\/\/github.com\/0jrm\/toy\/pull\/9/);
-    assert.doesNotMatch(result.markdown, /^merge: /m);
+    assert.match(result.markdown, new RegExp(`merge: runhub merge ${result.runId}`));
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /pr_opened/);
+    prune(0);
+  });
+});
+
+test("an origin remote without projects.toml remote does not push or open a PR", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+exit 0
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({ cwd: work, prompt: "no push", testCmd: "true", timeoutMs: 20_000 });
+    assert.equal(existsSync(argvLog), false);
+    assert.doesNotMatch(result.markdown, /^pr: /m);
+    assert.match(result.markdown, /^merge: git -C /m);
     prune(0);
   });
 });

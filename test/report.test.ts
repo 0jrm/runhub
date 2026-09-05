@@ -23,7 +23,7 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
   assert.match(md, /branch: runhub\/11111111-1111-1111-1111-111111111111/);
   assert.match(md, /merge: git -C '\/tmp\/app' merge runhub\//);
   assert.doesNotMatch(md, /porcelain/);
-  assert.match(md, /agent:\npatched the test/);
+  assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
 });
 
 test("merge quotes the cwd so a path with spaces still runs", () => {
@@ -115,10 +115,11 @@ test("REJECT review keeps pass on line one", () => {
   assert.match(md, /review: REJECT/);
 });
 
-test("extractUsages reads camelCase and snake_case token fields", () => {
-  const cursor = '{"type":"result","usage":{"inputTokens":20296,"outputTokens":233}}\n';
+test("extractUsages reads cursor-agent result.usage camelCase and keeps counts under 1000 exact", () => {
+  const line =
+    '{"type":"result","subtype":"success","usage":{"inputTokens":18168,"outputTokens":179,"cacheReadTokens":22016,"cacheWriteTokens":0}}';
+  assert.deepEqual(extractUsages(`${line}\n`), [{ inputTokens: 18168, outputTokens: 179 }]);
   const claude = '{"type":"result","usage":{"input_tokens":1500,"output_tokens":40}}\n';
-  assert.deepEqual(extractUsages(cursor), [{ inputTokens: 20296, outputTokens: 233 }]);
   assert.deepEqual(extractUsages(claude), [{ inputTokens: 1500, outputTokens: 40 }]);
 });
 
@@ -139,6 +140,6 @@ test("a missing final message says so instead of dumping the json tail", () => {
   ).join("\n");
   assert.equal(extractFinalMessage(noisy), "(no final message)");
   const md = renderReport(view(), { agentStdout: noisy, agentStderr: "" });
-  assert.match(md, /agent:\n\(no final message\)/);
+  assert.match(md, /agent: cursor-agent \(cursor-agent\)\n\(no final message\)/);
   assert.doesNotMatch(md, /chunk-39/);
 });

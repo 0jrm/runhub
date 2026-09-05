@@ -196,6 +196,7 @@ async function main(argv: string[]): Promise<number> {
         testCmd: flags.get("test-cmd") ?? resolved.test,
         typecheckCmd: resolved.typecheck,
         lintCmd: resolved.lint,
+        remote: resolved.remote,
         agent,
         model: flags.get("model") ?? defaultModel(agent),
         review,

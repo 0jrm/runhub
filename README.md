@@ -16,7 +16,7 @@ npm install -g .
 
 ## Everyday use
 
-Point at a git repo. Say the job. `--cwd` can be a filesystem path or a name from `~/.config/runhub/projects.toml`. Keys in that file are `path`, `test`, `typecheck`, and `lint`. A `test` key wins over detection. `--test-cmd` wins over both.
+Point at a git repo. Say the job. `--cwd` can be a filesystem path or a name from `~/.config/runhub/projects.toml`. Keys in that file are `path`, `test`, `typecheck`, `lint`, and `remote`. A `test` key wins over detection. `--test-cmd` wins over both.
 
 ```bash
 runhub run --cwd /home/jrm22n/some-project --prompt "fix the login bug"
@@ -47,7 +47,7 @@ After tests, runhub runs typecheck and lint when the project declares them. It u
 
 If tests ran and failed and the agent exited 0, runhub runs the same agent once more in that worktree with the test tail, commits, and verifies again.
 
-If the source repo has an `origin` remote, runhub pushes `runhub/<runId>`. If `gh` is on PATH and `gh auth status` succeeds, it opens a PR whose body is `report.md`. The report then has a `pr:` line instead of `merge:`.
+If the project entry sets `remote`, runhub pushes `runhub/<runId>` to that git remote and, if `gh` is on PATH and `gh auth status` succeeds, opens a PR whose body is `report.md`. The report then has both `pr: <url>` and `merge: runhub merge <runId>`. Without `remote`, there is no push and the report keeps `merge: git -C <cwd> merge runhub/<runId>`.
 
 ```bash
 runhub run --cwd /home/jrm22n/hycom --agent claude --prompt "add a smoke test"
@@ -61,7 +61,7 @@ runhub merge <runId>
 
 The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. `fail` means the agent exited non-zero, timed out, or a test, typecheck, or lint command ran and exited non-zero. Review stays on its own line.
 
-The report starts with outcome, project name, and duration. Branch and merge or PR. Diff-stat. Tests, retry, typecheck, lint. The agent's last message. On a failed agent, the last 20 lines of `agent.stderr`. Review verdict if you asked for one. `runhub report <runId>` prints that stored file unchanged.
+The report starts with outcome, project name, and duration. Branch, then `pr:` and `merge:` when a PR opened. Diff-stat. Tests, retry, typecheck, lint. The agent binary and last message. On a failed agent, the last 20 lines of `agent.stderr`. Review binary and verdict if you asked for one. `runhub report <runId>` prints that stored file unchanged.
 
 ```bash
 runhub status

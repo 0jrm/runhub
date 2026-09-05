@@ -111,14 +111,14 @@ export function diffStatText(cwd: string, range: DiffRange): string {
   return gitText(cwd, ["diff", "--stat", `${range.from}..${range.to}`]);
 }
 
-export function originUrl(cwd: string): string | undefined {
-  const r = git(cwd, ["remote", "get-url", "origin"]);
+export function remoteUrl(cwd: string, remote: string): string | undefined {
+  const r = git(cwd, ["remote", "get-url", remote]);
   if (r.status !== 0) return undefined;
   const url = r.stdout.trim();
   return url.length > 0 ? url : undefined;
 }
 
-export function pushBranch(cwd: string, branch: string): { status: number; text: string } {
-  const r = git(cwd, ["push", "-u", "origin", branch], 120_000);
+export function pushBranch(cwd: string, remote: string, branch: string): { status: number; text: string } {
+  const r = git(cwd, ["push", "-u", remote, branch], 120_000);
   return { status: r.status, text: `${r.stdout}${r.stderr}`.trimEnd() };
 }
