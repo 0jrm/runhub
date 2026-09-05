@@ -3,6 +3,15 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ParseError } from "./domain.js";
 
+export class NotInProjectsError extends Error {
+  readonly path: string;
+  constructor(path: string) {
+    super(`not in projects.toml: ${path}`);
+    this.name = "NotInProjectsError";
+    this.path = path;
+  }
+}
+
 export type Project = {
   name: string;
   path: string;
@@ -110,7 +119,7 @@ export function resolveRunCwd(raw: string, projects: readonly Project[]): Resolv
   const cwd = resolve(raw);
   const matched = projects.find((p) => pathsEqual(cwd, resolve(p.path)));
   if (matched !== undefined) return withProjectCmds(cwd, matched);
-  return { cwd };
+  throw new NotInProjectsError(cwd);
 }
 
 function parseTomlValue(raw: string): string {

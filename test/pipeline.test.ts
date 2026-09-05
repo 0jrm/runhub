@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { runPipeline } from "../src/pipeline.js";
-import { porcelainPath, prune, reportPath, reviewPath, runDir, runsRoot, worktreePath } from "../src/store.js";
+import {
+  porcelainPath,
+  prune,
+  reportPath,
+  reviewPath,
+  runDir,
+  runsRoot,
+  worktreePath,
+} from "../src/store.js";
 import {
   TRACKED_FILE,
   UNTRACKED_FILE,
@@ -58,6 +66,7 @@ test("agent work is committed after the agent, so the branch and the diff carry 
 
     const subject = spawnSync("git", ["log", "-1", "--format=%s"], { cwd: tree, encoding: "utf8" }).stdout.trim();
     assert.equal(subject, "runhub: edit the readme and add a file");
+    assert.equal(statSync(runDir(result.runId)).mode & 0o777, 0o700);
 
     const merge = spawnSync("sh", ["-c", mergeCommandOf(result.markdown)], { encoding: "utf8" });
     assert.equal(merge.status, 0, merge.stderr);

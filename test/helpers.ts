@@ -68,6 +68,11 @@ export function tempDir(tag: string): string {
   return mkdtempSync(join(tmpdir(), `runhub-${tag}-`));
 }
 
+export function writeProjectsToml(configHome: string, name: string, projectPath: string, extra = ""): void {
+  mkdirSync(join(configHome, "runhub"), { recursive: true });
+  writeFileSync(join(configHome, "runhub", "projects.toml"), `[${name}]\npath = "${projectPath}"\n${extra}`);
+}
+
 export function withEnv(fn: () => Promise<void>): Promise<void> {
   const prevXdg = process.env.XDG_DATA_HOME;
   const prevPath = process.env.PATH;

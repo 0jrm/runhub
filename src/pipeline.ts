@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -33,6 +33,7 @@ import {
   reportPath,
   reviewPath,
   runDir,
+  ensureRunDir,
   worktreePath,
   writeArtifacts,
 } from "./store.js";
@@ -102,7 +103,7 @@ export function prepareRun(opts: PipelineOpts): RunId {
   const agent = opts.agent ?? "cursor";
   const model = opts.model ?? defaultModel(agent);
   const review = opts.review ?? "none";
-  mkdirSync(runDir(runId), { recursive: true });
+  ensureRunDir(runId);
   writeFileSync(promptPath(runId), opts.prompt, "utf8");
   emit(runId, {
     kind: "run_created",

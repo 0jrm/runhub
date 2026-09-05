@@ -31,7 +31,9 @@ export function extractFinalMessage(raw: string): string {
       continue;
     }
   }
-  if (found === undefined) return "(no final message)";
+  if (found === undefined) {
+    return "(no final message; stream-json format may have changed, run npm run contract)";
+  }
   return found.trim().replace(/\.([A-Z])/g, ".\n\n$1");
 }
 
@@ -51,8 +53,10 @@ export function parseReview(raw: string): { verdict: Verdict; extra: string[] } 
     }
   }
   if (verdict === "unparsed") {
-    const tail = lastLines(raw, 3);
-    return { verdict, extra: tail.length === 0 ? [] : tail.split("\n") };
+    return {
+      verdict,
+      extra: ["(no APPROVE or REJECT; format may have changed, run npm run contract)"],
+    };
   }
   return { verdict, extra: lines.filter((l) => /^[-*]\s+/.test(l)).slice(0, 3) };
 }

@@ -1,4 +1,14 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  appendFileSync,
+  existsSync,
+  chmodSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -18,6 +28,13 @@ export function runsRoot(): string {
 
 export function runDir(runId: RunId): string {
   return join(runsRoot(), runId);
+}
+
+export function ensureRunDir(runId: RunId): string {
+  const dir = runDir(runId);
+  mkdirSync(dir, { recursive: true });
+  chmodSync(dir, 0o700);
+  return dir;
 }
 
 export function worktreePath(runId: RunId): string {
@@ -53,8 +70,7 @@ export function newRunId(): RunId {
 }
 
 export function appendEvent(runId: RunId, event: Event): void {
-  const dir = runDir(runId);
-  mkdirSync(dir, { recursive: true });
+  const dir = ensureRunDir(runId);
   appendFileSync(join(dir, "events.jsonl"), `${JSON.stringify(event)}\n`, "utf8");
 }
 
@@ -75,8 +91,7 @@ export function loadView(runId: RunId): RunView {
 }
 
 export function writeArtifacts(runId: RunId, files: { summary: unknown; markdown: string }): void {
-  const dir = runDir(runId);
-  mkdirSync(dir, { recursive: true });
+  const dir = ensureRunDir(runId);
   writeFileSync(join(dir, "summary.json"), `${JSON.stringify(files.summary, null, 2)}\n`, "utf8");
   writeFileSync(join(dir, "report.md"), files.markdown, "utf8");
 }

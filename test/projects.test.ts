@@ -3,7 +3,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { ParseError } from "../src/domain.js";
-import { loadProjects, parseProjects, resolveRunCwd } from "../src/projects.js";
+import { loadProjects, NotInProjectsError, parseProjects, resolveRunCwd } from "../src/projects.js";
 import { tempDir } from "./helpers.js";
 
 test("parseProjects reads tables, quoted test, comments, and blanks", () => {
@@ -76,7 +76,7 @@ test("loadProjects reads projects.toml under XDG_CONFIG_HOME", () => {
   }
 });
 
-test("resolveRunCwd matches a project name, then a realpath, else resolve(raw)", () => {
+test("resolveRunCwd matches a project name or a listed path, and refuses anything else", () => {
   const dir = tempDir("proj-cwd");
   const parent = tempDir("proj-linkp");
   const link = join(parent, "link");
@@ -85,7 +85,15 @@ test("resolveRunCwd matches a project name, then a realpath, else resolve(raw)",
   assert.deepEqual(resolveRunCwd("toy", projects), { cwd: resolve(dir), test: "true" });
   assert.deepEqual(resolveRunCwd(dir, projects), { cwd: resolve(dir), test: "true" });
   assert.deepEqual(resolveRunCwd(link, projects), { cwd: resolve(link), test: "true" });
-  assert.deepEqual(resolveRunCwd("other", projects), { cwd: resolve("other") });
+  const other = resolve("other");
+  assert.throws(
+    () => resolveRunCwd("other", projects),
+    (err: unknown) => err instanceof NotInProjectsError && err.message === `not in projects.toml: ${other}`,
+  );
+  assert.throws(
+    () => resolveRunCwd(dir, []),
+    (err: unknown) => err instanceof NotInProjectsError && err.message === `not in projects.toml: ${resolve(dir)}`,
+  );
   assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir }]), { cwd: resolve(dir) });
   assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir, typecheck: "mypy", lint: "ruff check", remote: "origin" }]), {
     cwd: resolve(dir),
