@@ -152,7 +152,6 @@ export function agentArgv(opts: {
         cwd: opts.cwd,
         argv: [
           opts.bin,
-          "-p",
           "--single",
           opts.prompt,
           "--output-format",
@@ -170,7 +169,6 @@ export function agentArgv(opts: {
 export function grokTextFallbackArgv(opts: { bin: string; prompt: string; cwd: string }): string[] {
   return [
     opts.bin,
-    "-p",
     "--single",
     opts.prompt,
     "--output-format",
