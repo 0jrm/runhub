@@ -14,7 +14,7 @@ import {
   type PromptSource,
   type ReviewKind,
 } from "./domain.js";
-import { loadProjects, resolveRunCwd } from "./projects.js";
+import { loadProjects, NotInProjectsError, resolveRunCwd } from "./projects.js";
 import { appendEvent, listRuns, loadView, prune, reportPath, resolveRunId, runDir, tallyLine } from "./store.js";
 import { executePipeline, prepareRun } from "./pipeline.js";
 
@@ -322,7 +322,7 @@ if (entry !== undefined) {
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`${message}\n`);
-        process.exit(1);
+        process.exit(err instanceof NotInProjectsError ? 2 : 1);
       },
     );
   }

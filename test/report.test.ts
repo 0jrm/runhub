@@ -94,16 +94,23 @@ test("review verdict and three bullets", () => {
   assert.doesNotMatch(md, /- extra/);
 });
 
-test("an unparsed review keeps its last three lines", () => {
+test("an unparsed review says so instead of printing a tail", () => {
   const v = view();
   const body = ["chatter", "line eight", "line nine", "line ten"].join("\n");
   const parsed = parseReview(body);
   assert.equal(parsed.verdict, "unparsed");
-  assert.deepEqual(parsed.extra, ["line eight", "line nine", "line ten"]);
+  assert.deepEqual(parsed.extra, [
+    "(no APPROVE or REJECT; format may have changed, run npm run contract)",
+  ]);
   v.reviewVerdict = parsed.verdict;
   v.reviewBody = body;
   const md = renderReport(v, { agentStdout: "", agentStderr: "" });
-  assert.match(md, /review: unparsed\nline eight\nline nine\nline ten/);
+  assert.match(
+    md,
+    /review: unparsed\n\(no APPROVE or REJECT; format may have changed, run npm run contract\)/,
+  );
+  assert.doesNotMatch(md, /line eight/);
+  assert.doesNotMatch(md, /line ten/);
 });
 
 test("parseReview reads the raw text, not just a result envelope", () => {
@@ -111,7 +118,9 @@ test("parseReview reads the raw text, not just a result envelope", () => {
   const parsed = parseReview(raw);
   assert.equal(parsed.verdict, "REJECT");
   assert.deepEqual(parsed.extra, ["- bug"]);
-  assert.deepEqual(parseReview("").extra, []);
+  assert.deepEqual(parseReview("").extra, [
+    "(no APPROVE or REJECT; format may have changed, run npm run contract)",
+  ]);
 });
 
 test("REJECT review keeps pass on line one", () => {
@@ -146,8 +155,14 @@ test("a missing final message says so instead of dumping the json tail", () => {
     { length: 40 },
     (_, i) => `{"type":"assistant","seq":${i},"payload":"chunk-${i}-${"x".repeat(80)}"}`,
   ).join("\n");
-  assert.equal(extractFinalMessage(noisy), "(no final message)");
+  assert.equal(
+    extractFinalMessage(noisy),
+    "(no final message; stream-json format may have changed, run npm run contract)",
+  );
   const md = renderReport(view(), { agentStdout: noisy, agentStderr: "" });
-  assert.match(md, /agent: cursor-agent \(cursor-agent\)\n\(no final message\)/);
+  assert.match(
+    md,
+    /agent: cursor-agent \(cursor-agent\)\n\(no final message; stream-json format may have changed, run npm run contract\)/,
+  );
   assert.doesNotMatch(md, /chunk-39/);
 });

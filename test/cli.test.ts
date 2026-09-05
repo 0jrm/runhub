@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { parseTimeout } from "../src/cli.js";
-import { gitRepo, prependPath, tempDir, writeFakeAgent } from "./helpers.js";
+import { gitRepo, prependPath, tempDir, writeFakeAgent, writeProjectsToml } from "./helpers.js";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "../../dist/cli.js");
 
@@ -51,18 +51,20 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   assert.match(review.stderr, /--review must be claude or none/);
 
   const cfg = mkdtempSync(join(tmpdir(), "runhub-cli-cfg-"));
+  const missingPath = join(tmpdir(), "no-such-runhub-dir");
   const missing = spawnSync(
     process.execPath,
-    [cli, "run", "--cwd", join(tmpdir(), "no-such-runhub-dir"), "--prompt", "x"],
+    [cli, "run", "--cwd", missingPath, "--prompt", "x"],
     { encoding: "utf8", env: { ...process.env, XDG_CONFIG_HOME: cfg } },
   );
-  assert.notEqual(missing.status, 0);
-  assert.match(missing.stderr, /not a directory/);
+  assert.equal(missing.status, 2);
+  assert.equal(missing.stderr, `not in projects.toml: ${missingPath}\n`);
 
   const prev = process.env.XDG_DATA_HOME;
   const prevCfg = process.env.XDG_CONFIG_HOME;
   const xdg = mkdtempSync(join(tmpdir(), "runhub-cli-xdg-"));
   const bare = mkdtempSync(join(tmpdir(), "runhub-nongit-"));
+  writeProjectsToml(xdg, "bare", bare);
   process.env.XDG_DATA_HOME = xdg;
   process.env.XDG_CONFIG_HOME = xdg;
   try {
@@ -86,6 +88,7 @@ test("run prints only the run id and wait prints the report", () => {
   const work = mkdtempSync(join(tmpdir(), "runhub-cli-work-"));
   const binDir = mkdtempSync(join(tmpdir(), "runhub-cli-bin-"));
   gitRepo(work);
+  writeProjectsToml(xdg, "work", work);
   writeFileSync(join(binDir, "cursor-agent"), "#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"ok\"}'\n");
   chmodSync(join(binDir, "cursor-agent"), 0o755);
   const env = {
@@ -126,6 +129,7 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
   const binDir = tempDir("cli-prompt-bin");
   gitRepo(work);
   writeFakeAgent(binDir);
+  writeProjectsToml(xdg, "work", work);
   const env = { ...process.env, XDG_DATA_HOME: xdg, XDG_CONFIG_HOME: xdg, PATH: prependPath(binDir) };
   const spec = "line one\nline two\n";
   const specPath = join(binDir, "spec.md");
@@ -172,6 +176,7 @@ test("wait times out with exit 3 while a sleeping agent keeps running", async ()
   const work = mkdtempSync(join(tmpdir(), "runhub-cli-sigw-"));
   const binDir = mkdtempSync(join(tmpdir(), "runhub-cli-sigb-"));
   gitRepo(work);
+  writeProjectsToml(xdg, "work", work);
   writeFileSync(join(binDir, "cursor-agent"), "#!/bin/sh\nexec sleep 999\n");
   chmodSync(join(binDir, "cursor-agent"), 0o755);
   const env = {
@@ -208,6 +213,7 @@ test("SIGKILL of the __exec worker makes list show stale", async () => {
   const work = mkdtempSync(join(tmpdir(), "runhub-cli-killw-"));
   const binDir = mkdtempSync(join(tmpdir(), "runhub-cli-killb-"));
   gitRepo(work);
+  writeProjectsToml(xdg, "work", work);
   writeFileSync(join(binDir, "cursor-agent"), "#!/bin/sh\nexec sleep 999\n");
   chmodSync(join(binDir, "cursor-agent"), 0o755);
   const env = {
@@ -310,6 +316,39 @@ test("--cwd accepts a project name and uses that project's test", () => {
   });
   assert.match(overrideWait.stdout, /tests: true {2}exit 0/);
   assert.doesNotMatch(overrideWait.stdout, /tests: false/);
+});
+
+test("run accepts a listed path and refuses a path that is not in projects.toml", () => {
+  const xdg = tempDir("cli-allow-xdg");
+  const work = tempDir("cli-allow-work");
+  const outsider = tempDir("cli-allow-out");
+  const binDir = tempDir("cli-allow-bin");
+  gitRepo(work);
+  gitRepo(outsider);
+  writeFakeAgent(binDir);
+  writeProjectsToml(xdg, "work", work);
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
+    PATH: prependPath(binDir),
+  };
+
+  const listed = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", work, "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /^runhub: [0-9a-f-]{36}\n$/);
+
+  const refused = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", outsider, "--prompt", "x", "--timeout", "20s"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(refused.status, 2, refused.stderr);
+  assert.equal(refused.stderr, `not in projects.toml: ${outsider}\n`);
 });
 
 test("merge uses gh pr merge when a PR URL was recorded", () => {
