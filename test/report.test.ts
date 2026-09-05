@@ -92,6 +92,15 @@ test("parseReview reads the raw text, not just a result envelope", () => {
   assert.deepEqual(parseReview("").extra, []);
 });
 
+test("extractFinalMessage keeps the last result and splits a glued sentence", () => {
+  const two = ['{"type":"result","result":"first"}', '{"type":"result","result":"second"}'].join("\n");
+  assert.equal(extractFinalMessage(two), "second");
+  assert.equal(
+    extractFinalMessage('{"type":"result","result":"leaving git untouched.Added RUNHUB_GATE.txt"}\n'),
+    "leaving git untouched.\n\nAdded RUNHUB_GATE.txt",
+  );
+});
+
 test("a missing final message says so instead of dumping the json tail", () => {
   assert.equal(extractFinalMessage('{"type":"result","result":"done"}\n'), "done");
   const noisy = Array.from(

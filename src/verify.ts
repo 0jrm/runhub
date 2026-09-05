@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type DiffRange, type VerifyResult } from "./domain.js";
 import { diffStatText } from "./git.js";
@@ -24,7 +24,59 @@ export function detectTestCmd(cwd: string, override?: string): string | undefine
     const text = readFileSync(makePath, "utf8");
     if (/^test\s*:/m.test(text)) return "make test";
   }
+  if (findPytest(cwd)) return "pytest";
   return undefined;
+}
+
+const SKIP_WALK = new Set([".git", "node_modules", ".venv", "venv", "dist", "tree", ".tox", "target"]);
+
+function hasPytest(dir: string): boolean {
+  const pyPath = join(dir, "pyproject.toml");
+  if (!existsSync(pyPath)) return false;
+  let text = "";
+  try {
+    text = readFileSync(pyPath, "utf8");
+  } catch {
+    return false;
+  }
+  if (/^\[tool\.pytest/m.test(text)) return true;
+  if (/\bpytest\b/.test(text)) return true;
+  try {
+    return statSync(join(dir, "tests")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function findPytest(cwd: string): boolean {
+  if (hasPytest(cwd)) return true;
+  let names: string[] = [];
+  try {
+    names = readdirSync(cwd);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (SKIP_WALK.has(name)) continue;
+    const child = join(cwd, name);
+    try {
+      if (!statSync(child).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (hasPytest(child)) return true;
+    if (name !== "packages") continue;
+    let pkgs: string[] = [];
+    try {
+      pkgs = readdirSync(child);
+    } catch {
+      continue;
+    }
+    for (const pkg of pkgs) {
+      if (hasPytest(join(child, pkg))) return true;
+    }
+  }
+  return false;
 }
 
 export async function runVerify(opts: {

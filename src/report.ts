@@ -19,15 +19,14 @@ export function extractFinalMessage(raw: string): string {
       if (typeof obj !== "object" || obj === null) continue;
       const rec = obj as Record<string, unknown>;
       if (rec.type !== "result") continue;
-      for (const key of ["result", "message", "text", "content"] as const) {
-        const v = rec[key];
-        if (typeof v === "string" && v.trim().length > 0) found = v;
-      }
+      const v = rec.result;
+      if (typeof v === "string" && v.trim().length > 0) found = v;
     } catch {
       continue;
     }
   }
-  return found === undefined ? "(no final message)" : found.trim();
+  if (found === undefined) return "(no final message)";
+  return found.trim().replace(/\.([A-Z])/g, ".\n\n$1");
 }
 
 export function parseReview(raw: string): { verdict: Verdict; extra: string[] } {

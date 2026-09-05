@@ -33,7 +33,7 @@ cat /tmp/spec.md | runhub run --cwd /home/jrm22n/hycom --prompt -
 
 When the agent exits, runhub commits whatever it left dirty in the worktree as `runhub: <first 60 chars of the prompt>`, so the branch holds the work whether or not the agent committed anything itself. Dependency directories are never committed. Everything after that reads the committed range `<base>..<commit>`. Diff-stat goes in the phone report. The pre-commit `git status --porcelain` stays in `porcelain.txt` on disk.
 
-A fresh worktree has no `node_modules`, so runhub symlinks the gitignored `node_modules`, `.venv`, `venv`, `target`, and `.tox` from the real repo into the worktree. `npm test` and `pytest` work in the worktree without an install step. Tests run only if `package.json` has `scripts.test` (`npm test`) or the Makefile has a `test:` target (`make test`). Otherwise the report says `tests: none`. Override with `--test-cmd`.
+A fresh worktree has no `node_modules`, so runhub symlinks the gitignored `node_modules`, `.venv`, `venv`, `target`, and `.tox` from the real repo into the worktree. `npm test` and `pytest` work in the worktree without an install step. Tests run if `package.json` has `scripts.test` (`npm test`), the Makefile has a `test:` target (`make test`), or a `pyproject.toml` has `[tool.pytest*]`, a `pytest` dependency, or a `tests/` directory next to it (`pytest`). Runhub also looks under `packages/*` for that pyproject. Otherwise the report says `tests: none`. Override with `--test-cmd`.
 
 ```bash
 runhub run --cwd /home/jrm22n/hycom --agent claude --prompt "add a smoke test"

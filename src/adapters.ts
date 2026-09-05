@@ -151,7 +151,6 @@ export function runProcessGroup(opts: {
         clearInterval(reap);
         resolve({ code, timedOut, aborted });
       }, GROUP_REAP_POLL_MS);
-      reap.unref();
     };
 
     const onAbort = () => {
