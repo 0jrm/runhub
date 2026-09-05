@@ -1,0 +1,29 @@
+{
+  "name": "runhub",
+  "version": "0.1.0",
+  "description": "Blocking CLI that records a Run as an event log, delegates to cursor-agent, claude, and grok, and prints a markdown report.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "runhub": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "GROKBOT.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/cli.js",
+    "prepack": "npm run build",
+    "test": "tsc && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "pack:tarball": "npm pack"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.8.0"
+  }
+}
