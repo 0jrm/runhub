@@ -21,6 +21,8 @@ export function reduce(events: readonly Event[]): RunView {
     timeoutMs: first.timeoutMs,
     errors: [],
     usages: [],
+    depsWarnings: [],
+    sandbox: first.sandbox,
     ...(first.testCmd === undefined ? {} : { testCmd: first.testCmd }),
     ...(first.typecheckCmd === undefined ? {} : { typecheckCmd: first.typecheckCmd }),
     ...(first.lintCmd === undefined ? {} : { lintCmd: first.lintCmd }),
@@ -72,6 +74,13 @@ export function reduce(events: readonly Event[]): RunView {
         view.retryAttempt = ev.attempt;
         break;
       case "pgid_recorded":
+        if (ev.stepId === "agent") view.agentPgid = ev.pgid;
+        break;
+      case "deps_warned":
+        view.depsWarnings.push(...ev.lines);
+        break;
+      case "run_killed":
+        view.killed = true;
         break;
       case "push_recorded":
         view.pushedRemote = ev.remote;

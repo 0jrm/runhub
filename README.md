@@ -16,7 +16,11 @@ npm install -g .
 
 ## Everyday use
 
+<<<<<<< HEAD
 Point at a git repo that is already in `~/.config/runhub/projects.toml`. `--cwd` is a filesystem path or a table name from that file. `runhub run` refuses any other path. Exit 2, message `not in projects.toml: <resolved path>`. Keys in that file are `path`, `test`, `typecheck`, `lint`, and `remote`. A `test` key wins over detection. `--test-cmd` wins over both.
+=======
+Point at a git repo. Say the job. `--cwd` can be a filesystem path or a name from `~/.config/runhub/projects.toml`. Keys in that file are `path`, `test`, `typecheck`, `lint`, `remote`, and `sandbox`. A `test` key wins over detection. `--test-cmd` wins over both. `sandbox = "user"` runs the agent and reviewer as `runhub-agent` (default for a listed project once `scripts/setup-agent-user.sh` has created that user). `sandbox = "none"` keeps them on your uid. Commit, push, `gh`, and tests stay on your uid. The report line is `sandbox: runhub-agent` or `sandbox: none`.
+>>>>>>> 2a50b49 (runhub: Implement SANDBOX.md option a. Read SANDBOX.md, src/adapters)
 
 ```bash
 runhub run --cwd /home/jrm22n/hycom --prompt "fix the login bug"
@@ -70,7 +74,19 @@ runhub list
 runhub prune --keep 20
 ```
 
+<<<<<<< HEAD
 `list` shows run id, project basename, outcome, and time. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A run is `running` only while its pipeline PID is alive. Otherwise an unfinished run is `stale`. `list` ends with a tally of the last 30 runs.
+=======
+`list` shows run id, project basename, outcome, and time. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A run is `running` only while its pipeline PID is alive. Otherwise an unfinished run is `stale`. `runhub kill <runId>` sends SIGTERM then SIGKILL to the recorded agent process group and the worker pid; `list` then shows `killed`. `list` ends with a tally of the last 30 runs. Each finished run prunes older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
+
+One-time sandbox install, with sudo:
+
+```bash
+sudo ./scripts/setup-agent-user.sh
+```
+
+That creates `runhub-agent` and group `runhub`, sets `~/.local/share/runhub` to `jrm22n:runhub` mode 2770, copies only Cursor/Claude auth into `/home/runhub-agent`, and prints the sudoers line. It will not write `/etc/sudoers.d/runhub-agent` unless you confirm on a tty. If a gitignored `node_modules` (or `.venv` / `venv` / `target` / `.tox`) is not group-writable by `runhub`, a run prints `deps: node_modules not group-writable, tests may fail` and puts that line in the report.
+>>>>>>> 2a50b49 (runhub: Implement SANDBOX.md option a. Read SANDBOX.md, src/adapters)
 
 Logs live in `~/.local/share/runhub/runs/`. Each run directory is mode 0700. `prompt.txt`, `review-prompt.txt`, and `report.md` are plaintext. Anyone who can read that tree can read the prompts. Finished runs prune older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
 

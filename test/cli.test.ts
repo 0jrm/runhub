@@ -272,6 +272,46 @@ test("SIGKILL of the __exec worker makes list show stale", async () => {
   assert.match(listed, new RegExp(`${id} \\S+ stale `));
 });
 
+test("kill stops a live run and list shows killed", async () => {
+  const xdg = mkdtempSync(join(tmpdir(), "runhub-cli-rhkill-"));
+  const work = mkdtempSync(join(tmpdir(), "runhub-cli-rhkillw-"));
+  const binDir = mkdtempSync(join(tmpdir(), "runhub-cli-rhkillb-"));
+  gitRepo(work);
+  writeFileSync(join(binDir, "cursor-agent"), "#!/bin/sh\nexec sleep 999\n");
+  chmodSync(join(binDir, "cursor-agent"), 0o755);
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
+    PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+  };
+  const r = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  const id = r.stdout.trim().slice("runhub: ".length);
+  const eventsPath = join(xdg, "runhub", "runs", id, "events.jsonl");
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    let events = "";
+    try {
+      events = readFileSync(eventsPath, "utf8");
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      continue;
+    }
+    if (/"kind":"pgid_recorded"/.test(events) && /"kind":"pipeline_started"/.test(events)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const killed = spawnSync(process.execPath, [cli, "kill", id], { encoding: "utf8", env });
+  assert.equal(killed.status, 0, killed.stderr);
+  assert.equal(killed.stdout.trim(), `killed ${id}`);
+  const listed = spawnSync(process.execPath, [cli, "list"], { encoding: "utf8", env });
+  assert.match(listed.stdout, new RegExp(`${id} \\S+ killed `));
+});
+
 test("--cwd accepts a project name and uses that project's test", () => {
   const xdg = tempDir("cli-name-xdg");
   const work = tempDir("cli-name-work");
@@ -279,7 +319,7 @@ test("--cwd accepts a project name and uses that project's test", () => {
   gitRepo(work, [{ path: "package.json", body: '{"scripts":{"test":"node --test"}}\n' }]);
   writeFakeAgent(binDir);
   mkdirSync(join(xdg, "runhub"), { recursive: true });
-  writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "true"\n`);
+  writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "true"\nsandbox = none\n`);
   const env = {
     ...process.env,
     XDG_DATA_HOME: xdg,
@@ -302,7 +342,7 @@ test("--cwd accepts a project name and uses that project's test", () => {
   assert.doesNotMatch(namedWait.stdout, /npm test/);
   assert.doesNotMatch(namedWait.stdout, /pytest/);
 
-  writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "false"\n`);
+  writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "false"\nsandbox = none\n`);
   const override = spawnSync(
     process.execPath,
     [cli, "run", "--cwd", "toy", "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
