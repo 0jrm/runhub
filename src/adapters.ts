@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
-import { CURSOR_MODEL, stripYoloFlags, yoloFlagsForCursor } from "./domain.js";
+import { assertNever, type AgentKind } from "./domain.js";
 
 export type SpawnResult = {
   code: number | null;
   timedOut: boolean;
+  aborted: boolean;
 };
 
 export function findOnPath(names: readonly string[]): string | undefined {
@@ -27,23 +28,50 @@ export function findOnPath(names: readonly string[]): string | undefined {
   return undefined;
 }
 
-export function resolveAgentBin(): string | undefined {
-  return findOnPath(["cursor-agent", "agent"]);
+export function resolveAgentBin(agent: AgentKind): string | undefined {
+  switch (agent) {
+    case "cursor":
+      return findOnPath(["cursor-agent", "agent"]);
+    case "claude":
+      return findOnPath(["claude"]);
+    default:
+      return assertNever(agent);
+  }
 }
 
-export function agentArgv(bin: string, cwd: string): string[] {
-  return stripYoloFlags([
-    bin,
-    "-p",
-    "--trust",
-    "--output-format",
-    "stream-json",
-    "--model",
-    CURSOR_MODEL,
-    "--workspace",
-    cwd,
-    ...yoloFlagsForCursor(),
-  ]);
+export function agentArgv(opts: { agent: AgentKind; bin: string; cwd: string; model: string }): string[] {
+  switch (opts.agent) {
+    case "cursor":
+      return [
+        opts.bin,
+        "-p",
+        "--trust",
+        "--output-format",
+        "stream-json",
+        "--model",
+        opts.model,
+        "--workspace",
+        opts.cwd,
+        "--force",
+      ];
+    case "claude":
+      return [
+        opts.bin,
+        "-p",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--model",
+        opts.model,
+        "--dangerously-skip-permissions",
+      ];
+    default:
+      return assertNever(opts.agent);
+  }
+}
+
+export function reviewArgv(bin: string, model: string): string[] {
+  return [bin, "-p", "--output-format", "text", "--model", model, "--dangerously-skip-permissions"];
 }
 
 export function runProcessGroup(opts: {
@@ -53,11 +81,11 @@ export function runProcessGroup(opts: {
   stdoutPath?: string;
   stderrPath?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<SpawnResult> {
-  const argv = stripYoloFlags(opts.argv);
-  const [file, ...args] = argv;
+  const [file, ...args] = opts.argv;
   if (file === undefined) {
-    return Promise.resolve({ code: 127, timedOut: false });
+    return Promise.resolve({ code: 127, timedOut: false, aborted: false });
   }
 
   return new Promise((resolve) => {
@@ -69,15 +97,15 @@ export function runProcessGroup(opts: {
     });
     const pid = child.pid;
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
     const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      process.removeListener("SIGINT", onSignal);
-      process.removeListener("SIGTERM", onSignal);
-      resolve({ code, timedOut });
+      opts.signal?.removeEventListener("abort", onAbort);
+      resolve({ code, timedOut, aborted });
     };
 
     const killGroup = (signal: NodeJS.Signals) => {
@@ -93,15 +121,19 @@ export function runProcessGroup(opts: {
       }
     };
 
-    const onSignal = () => {
+    const onAbort = () => {
+      aborted = true;
       killGroup("SIGTERM");
       setTimeout(() => {
         if (!settled) killGroup("SIGKILL");
       }, 400).unref();
     };
 
-    process.on("SIGINT", onSignal);
-    process.on("SIGTERM", onSignal);
+    if (opts.signal?.aborted) {
+      onAbort();
+    } else {
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+    }
 
     if (opts.stdinPath !== undefined && child.stdin) {
       const inn = createReadStream(opts.stdinPath);

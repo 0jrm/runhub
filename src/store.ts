@@ -1,9 +1,10 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseEventJson, toRunId, type Event, type RunId, type RunView } from "./domain.js";
+import { listOutcome, parseEventJson, toRunId, type Event, type RunId, type RunView } from "./domain.js";
 import { reduce } from "./reduce.js";
+import { removeRunWorktree } from "./git.js";
 
 export function dataRoot(): string {
   const xdg = process.env.XDG_DATA_HOME;
@@ -19,8 +20,16 @@ export function runDir(runId: RunId): string {
   return join(runsRoot(), runId);
 }
 
+export function worktreePath(runId: RunId): string {
+  return join(runDir(runId), "tree");
+}
+
 export function agentStdoutPath(runId: RunId): string {
   return join(runDir(runId), "agent.stdout");
+}
+
+export function agentStderrPath(runId: RunId): string {
+  return join(runDir(runId), "agent.stderr");
 }
 
 export function promptPath(runId: RunId): string {
@@ -29,6 +38,14 @@ export function promptPath(runId: RunId): string {
 
 export function reportPath(runId: RunId): string {
   return join(runDir(runId), "report.md");
+}
+
+export function reviewPath(runId: RunId): string {
+  return join(runDir(runId), "review.md");
+}
+
+export function porcelainPath(runId: RunId): string {
+  return join(runDir(runId), "porcelain.txt");
 }
 
 export function newRunId(): RunId {
@@ -64,9 +81,14 @@ export function writeArtifacts(runId: RunId, files: { summary: unknown; markdown
   writeFileSync(join(dir, "report.md"), files.markdown, "utf8");
 }
 
-export type ListedRun = { runId: RunId; createdAt: string; status: RunView["status"] };
+export type ListedRun = {
+  runId: RunId;
+  createdAt: string;
+  project: string;
+  outcome: ReturnType<typeof listOutcome>;
+};
 
-export function listRuns(): ListedRun[] {
+export function listRuns(now = Date.now()): ListedRun[] {
   const root = runsRoot();
   mkdirSync(root, { recursive: true });
   const out: ListedRun[] = [];
@@ -76,7 +98,12 @@ export function listRuns(): ListedRun[] {
       if (!statSync(dir).isDirectory()) continue;
       const id = toRunId(name);
       const view = loadView(id);
-      out.push({ runId: id, createdAt: view.createdAt, status: view.status });
+      out.push({
+        runId: id,
+        createdAt: view.createdAt,
+        project: basename(view.cwd),
+        outcome: listOutcome(view, now),
+      });
     } catch {
       continue;
     }
@@ -98,6 +125,19 @@ export function resolveRunId(arg: string | undefined): RunId {
   return latest;
 }
 
+function cleanupRun(runId: RunId): void {
+  try {
+    const view = loadView(runId);
+    if (view.branch && existsSync(view.cwd)) {
+      removeRunWorktree({ repo: view.cwd, tree: worktreePath(runId), branch: view.branch });
+    }
+  } catch {
+    return;
+  } finally {
+    rmSync(runDir(runId), { recursive: true, force: true });
+  }
+}
+
 export function prune(keep: number): { kept: RunId[]; deleted: RunId[] } {
   if (!Number.isInteger(keep) || keep < 0) {
     throw new Error("--keep must be a non-negative integer");
@@ -108,7 +148,7 @@ export function prune(keep: number): { kept: RunId[]; deleted: RunId[] } {
   if (excess <= 0) return { kept: runs.map((r) => r.runId), deleted };
   const toDelete = runs.slice(0, excess);
   for (const r of toDelete) {
-    rmSync(runDir(r.runId), { recursive: true, force: true });
+    cleanupRun(r.runId);
     deleted.push(r.runId);
   }
   return { kept: listRuns().map((r) => r.runId), deleted };

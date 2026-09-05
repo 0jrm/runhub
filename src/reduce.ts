@@ -15,12 +15,21 @@ export function reduce(events: readonly Event[]): RunView {
     cwd: first.cwd,
     createdAt: first.ts,
     status: "queued",
+    agent: first.agent,
+    model: first.model,
+    review: first.review,
+    timeoutMs: first.timeoutMs,
     errors: [],
   };
 
   for (const ev of events) {
     switch (ev.kind) {
       case "run_created":
+        break;
+      case "base_recorded":
+        view.baseSha = ev.baseSha;
+        view.branch = ev.branch;
+        view.status = "running";
         break;
       case "step_started":
         view.status = "running";
@@ -34,12 +43,16 @@ export function reduce(events: readonly Event[]): RunView {
         break;
       case "verify_recorded":
         view.verify = {
-          porcelain: ev.porcelain,
+          baseSha: ev.baseSha,
           diffStat: ev.diffStat,
           testTail: ev.testTail,
           ...(ev.testCmd === undefined ? {} : { testCmd: ev.testCmd }),
           ...(ev.testExit === undefined ? {} : { testExit: ev.testExit }),
         };
+        break;
+      case "review_recorded":
+        view.reviewVerdict = ev.verdict;
+        view.reviewBody = ev.body;
         break;
       case "error":
         view.errors.push(

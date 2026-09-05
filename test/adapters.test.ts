@@ -4,16 +4,38 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CURSOR_MODEL } from "../src/domain.js";
-import { agentArgv, runProcessGroup } from "../src/adapters.js";
+import { agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
 
-test("agent argv pins Cursor Grok 4.6 medium and omits the prompt", () => {
-  const argv = agentArgv("cursor-agent", "/tmp/app");
-  assert.equal(argv.includes("--model"), true);
+test("cursor argv pins Grok 4.6 medium, --force, and omits the prompt", () => {
+  const argv = agentArgv({
+    agent: "cursor",
+    bin: "cursor-agent",
+    cwd: "/tmp/app",
+    model: CURSOR_MODEL,
+  });
   assert.equal(argv[argv.indexOf("--model") + 1], CURSOR_MODEL);
-  assert.equal(CURSOR_MODEL, "cursor-grok-4.6-medium");
+  assert.ok(argv.includes("--force"));
   assert.equal(argv.includes("do the work"), false);
-  assert.equal(argv.includes("-p"), true);
-  assert.equal(argv.includes("stream-json"), true);
+});
+
+test("claude argv uses stream-json and skip-permissions", () => {
+  const argv = agentArgv({ agent: "claude", bin: "claude", cwd: "/tmp/app", model: "sonnet" });
+  assert.deepEqual(argv.slice(0, 5), ["claude", "-p", "--verbose", "--output-format", "stream-json"]);
+  assert.ok(argv.includes("--dangerously-skip-permissions"));
+  assert.equal(argv.includes("/tmp/app"), false);
+});
+
+test("review argv is print text with skip-permissions", () => {
+  const argv = reviewArgv("claude", "sonnet");
+  assert.deepEqual(argv, [
+    "claude",
+    "-p",
+    "--output-format",
+    "text",
+    "--model",
+    "sonnet",
+    "--dangerously-skip-permissions",
+  ]);
 });
 
 test("prompt arrives on stdin not argv", async () => {
@@ -31,17 +53,15 @@ cat > "$2"
   chmodSync(bin, 0o755);
   const promptFile = join(dir, "prompt.txt");
   writeFileSync(promptFile, "secret task text");
-  const stdoutFile = join(dir, "out.txt");
   const result = await runProcessGroup({
     argv: [bin, argvLog, stdinLog, "--model", "cursor-grok-4.6-medium"],
     cwd: dir,
     stdinPath: promptFile,
-    stdoutPath: stdoutFile,
+    stdoutPath: join(dir, "out.txt"),
     timeoutMs: 5000,
   });
   assert.equal(result.code, 0);
-  const recordedArgv = readFileSync(argvLog, "utf8");
-  assert.doesNotMatch(recordedArgv, /secret task text/);
+  assert.doesNotMatch(readFileSync(argvLog, "utf8"), /secret task text/);
   assert.equal(readFileSync(stdinLog, "utf8"), "secret task text");
 });
 
@@ -56,7 +76,20 @@ test("timeout kills a sleeping process group", async () => {
     cwd: dir,
     timeoutMs: 800,
   });
-  const elapsed = Date.now() - started;
   assert.equal(result.timedOut, true);
-  assert.ok(elapsed < 8000, `elapsed ${elapsed}`);
+  assert.ok(Date.now() - started < 8000);
+});
+
+test("abort signal kills the child and skips waiting for timeout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "runhub-ab-"));
+  const bin = join(dir, "sleep-agent");
+  writeFileSync(bin, "#!/bin/sh\nexec sleep 999\n");
+  chmodSync(bin, 0o755);
+  const ac = new AbortController();
+  const started = Date.now();
+  const pending = runProcessGroup({ argv: [bin], cwd: dir, timeoutMs: 30_000, signal: ac.signal });
+  setTimeout(() => ac.abort(), 100);
+  const result = await pending;
+  assert.equal(result.aborted, true);
+  assert.ok(Date.now() - started < 8000);
 });

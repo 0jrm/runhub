@@ -1,23 +1,23 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { DEFAULT_TIMEOUT_MS } from "./domain.js";
+import { DEFAULT_TIMEOUT_MS, defaultModel, type AgentKind, type ReviewKind } from "./domain.js";
 import { listRuns, loadView, prune, reportPath, resolveRunId } from "./store.js";
 import { runPipeline } from "./pipeline.js";
 
 const USAGE = `runhub <command>
 
 Commands:
-  run --cwd <dir> --prompt <text> [--timeout <duration>] [--test-cmd <cmd>]
+  run --cwd <dir> --prompt <text> [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
   status [runId]
   report [runId]
   list
   prune --keep <n>
 `;
 
-const RUN_FLAGS = new Set(["cwd", "prompt", "timeout", "test-cmd"]);
+const RUN_FLAGS = new Set(["cwd", "prompt", "timeout", "test-cmd", "agent", "model", "review"]);
 const PRUNE_FLAGS = new Set(["keep"]);
 
 type FlagMap = Map<string, string>;
@@ -64,6 +64,18 @@ export function parseTimeout(raw: string | undefined): number {
   if (unit === "m") return n * 60 * 1000;
   if (unit === "h") return n * 60 * 60 * 1000;
   return n * 1000;
+}
+
+function parseAgent(raw: string | undefined): AgentKind {
+  if (raw === undefined || raw === "cursor") return "cursor";
+  if (raw === "claude") return "claude";
+  throw new Error("--agent must be cursor or claude");
+}
+
+function parseReview(raw: string | undefined): ReviewKind {
+  if (raw === undefined || raw === "none") return "none";
+  if (raw === "claude") return "claude";
+  throw new Error("--review must be claude or none");
 }
 
 function assertGitCwd(cwd: string): void {
@@ -120,16 +132,23 @@ async function main(argv: string[]): Promise<number> {
       if (cwdRaw === undefined || prompt === undefined) {
         throw new Error("run requires --cwd and --prompt");
       }
+      const agent = parseAgent(flags.get("agent"));
+      const review = parseReview(flags.get("review"));
+      const timeoutMs = parseTimeout(flags.get("timeout"));
       const cwd = resolve(cwdRaw);
       assertGitCwd(cwd);
       const result = await runPipeline({
         cwd,
         prompt,
-        timeoutMs: parseTimeout(flags.get("timeout")),
+        timeoutMs,
         testCmd: flags.get("test-cmd"),
+        agent,
+        model: flags.get("model") ?? defaultModel(agent),
+        review,
       });
       process.stdout.write(result.markdown);
       if (!result.markdown.endsWith("\n")) process.stdout.write("\n");
+      process.stdout.write(`runhub: ${result.runId} ${reportPath(result.runId)}\n`);
       return result.failed ? 1 : 0;
     }
     case "status": {
@@ -153,7 +172,7 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       for (const r of runs) {
-        process.stdout.write(`${r.runId} ${r.createdAt} ${r.status}\n`);
+        process.stdout.write(`${r.runId} ${r.project} ${r.outcome} ${r.createdAt}\n`);
       }
       return 0;
     }
@@ -175,15 +194,23 @@ async function main(argv: string[]): Promise<number> {
 }
 
 const entry = process.argv[1];
-if (entry !== undefined && fileURLToPath(import.meta.url) === resolve(entry)) {
-  main(process.argv).then(
-    (code) => {
-      process.exit(code);
-    },
-    (err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`${message}\n`);
-      process.exit(1);
-    },
-  );
+if (entry !== undefined) {
+  let self = false;
+  try {
+    self = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
+  } catch {
+    self = fileURLToPath(import.meta.url) === resolve(entry);
+  }
+  if (self) {
+    main(process.argv).then(
+      (code) => {
+        process.exit(code);
+      },
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`${message}\n`);
+        process.exit(1);
+      },
+    );
+  }
 }

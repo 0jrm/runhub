@@ -1,7 +1,7 @@
 {
   "name": "runhub",
-  "version": "0.2.0",
-  "description": "One coding agent, mechanical verify, phone report.",
+  "version": "0.3.0",
+  "description": "One coding agent in a worktree, mechanical verify, optional Claude review, phone report.",
   "license": "MIT",
   "repository": {
     "type": "git",
