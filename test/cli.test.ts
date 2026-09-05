@@ -203,6 +203,69 @@ test("wait times out with exit 3 while a sleeping agent keeps running", async ()
   }
 });
 
+test("SIGKILL of the __exec worker makes list show stale", async () => {
+  const xdg = mkdtempSync(join(tmpdir(), "runhub-cli-kill-"));
+  const work = mkdtempSync(join(tmpdir(), "runhub-cli-killw-"));
+  const binDir = mkdtempSync(join(tmpdir(), "runhub-cli-killb-"));
+  gitRepo(work);
+  writeFileSync(join(binDir, "cursor-agent"), "#!/bin/sh\nexec sleep 999\n");
+  chmodSync(join(binDir, "cursor-agent"), 0o755);
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
+    PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+  };
+  const r = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  const id = r.stdout.trim().slice("runhub: ".length);
+  const eventsPath = join(xdg, "runhub", "runs", id, "events.jsonl");
+  let pid: number | undefined;
+  let agentPgid: number | undefined;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    let events = "";
+    try {
+      events = readFileSync(eventsPath, "utf8");
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      continue;
+    }
+    const pidMatch = events.match(/"kind":"pipeline_started"[^}]*"pid":(\d+)/);
+    const pgidMatch = events.match(/"kind":"pgid_recorded"[^}]*"pgid":(\d+)/);
+    if (pidMatch?.[1] !== undefined) pid = Number(pidMatch[1]);
+    if (pgidMatch?.[1] !== undefined) agentPgid = Number(pgidMatch[1]);
+    if (pid !== undefined) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(pid !== undefined, "pipeline pid missing");
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+  if (agentPgid !== undefined) {
+    try {
+      process.kill(-agentPgid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+  let listed = "";
+  const listDeadline = Date.now() + 5_000;
+  while (Date.now() < listDeadline) {
+    const out = spawnSync(process.execPath, [cli, "list"], { encoding: "utf8", env });
+    listed = out.stdout;
+    if (new RegExp(`${id} \\S+ stale `).test(listed)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.match(listed, new RegExp(`${id} \\S+ stale `));
+});
+
 test("--cwd accepts a project name and uses that project's test", () => {
   const xdg = tempDir("cli-name-xdg");
   const work = tempDir("cli-name-work");

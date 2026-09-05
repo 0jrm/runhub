@@ -1,9 +1,20 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type DiffRange, type VerifyResult } from "./domain.js";
-import { diffStatText } from "./git.js";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import {
+  TEST_TAIL_BYTES,
+  TEST_TIMEOUT_MS,
+  classifyExit,
+  classifyTest,
+  tailBytes,
+  type DiffRange,
+  type VerifyResult,
+} from "./domain.js";
+import { addDetachedWorktree, diffStatText, removeWorktree } from "./git.js";
 import { runProcessGroup } from "./adapters.js";
+import { dataRoot } from "./store.js";
 
 export type DetectedCmd = { cmd: string; cwd: string };
 
@@ -242,4 +253,115 @@ export async function runVerify(opts: {
     result = { ...result, lintCmd: lint.cmd, lintExit: ran.exit };
   }
   return result;
+}
+
+export type BaselineRecord = {
+  testCmd?: string;
+  testExit?: number;
+  typecheckCmd?: string;
+  typecheckExit?: number;
+  lintCmd?: string;
+  lintExit?: number;
+};
+
+function baselinePath(project: string, sha: string): string {
+  return join(dataRoot(), "baseline", `${project}-${sha}.json`);
+}
+
+function parseBaseline(raw: unknown): BaselineRecord | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const out: BaselineRecord = {};
+  if (typeof rec.testCmd === "string" && rec.testCmd.length > 0) out.testCmd = rec.testCmd;
+  if (typeof rec.testExit === "number" && Number.isFinite(rec.testExit)) out.testExit = rec.testExit;
+  if (typeof rec.typecheckCmd === "string" && rec.typecheckCmd.length > 0) out.typecheckCmd = rec.typecheckCmd;
+  if (typeof rec.typecheckExit === "number" && Number.isFinite(rec.typecheckExit)) {
+    out.typecheckExit = rec.typecheckExit;
+  }
+  if (typeof rec.lintCmd === "string" && rec.lintCmd.length > 0) out.lintCmd = rec.lintCmd;
+  if (typeof rec.lintExit === "number" && Number.isFinite(rec.lintExit)) out.lintExit = rec.lintExit;
+  return out;
+}
+
+function readBaselineCache(project: string, sha: string): BaselineRecord | undefined {
+  const path = baselinePath(project, sha);
+  if (!existsSync(path)) return undefined;
+  try {
+    return parseBaseline(JSON.parse(readFileSync(path, "utf8")) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+function writeBaselineCache(project: string, sha: string, record: BaselineRecord): void {
+  const path = baselinePath(project, sha);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function toBaseline(verify: VerifyResult): BaselineRecord {
+  return {
+    ...(verify.testCmd === undefined ? {} : { testCmd: verify.testCmd }),
+    ...(verify.testExit === undefined ? {} : { testExit: verify.testExit }),
+    ...(verify.typecheckCmd === undefined ? {} : { typecheckCmd: verify.typecheckCmd }),
+    ...(verify.typecheckExit === undefined ? {} : { typecheckExit: verify.typecheckExit }),
+    ...(verify.lintCmd === undefined ? {} : { lintCmd: verify.lintCmd }),
+    ...(verify.lintExit === undefined ? {} : { lintExit: verify.lintExit }),
+  };
+}
+
+async function runBaselineWorktree(opts: {
+  repo: string;
+  sha: string;
+  testCmdOverride?: string;
+  typecheckOverride?: string;
+  lintOverride?: string;
+  signal?: AbortSignal;
+}): Promise<BaselineRecord> {
+  const tree = join(tmpdir(), `runhub-base-${randomUUID()}`);
+  addDetachedWorktree({ repo: opts.repo, tree, sha: opts.sha });
+  try {
+    const verify = await runVerify({
+      cwd: tree,
+      range: { from: opts.sha, to: opts.sha },
+      testOutPath: join(tree, ".runhub-baseline.out"),
+      testCmdOverride: opts.testCmdOverride,
+      typecheckOverride: opts.typecheckOverride,
+      lintOverride: opts.lintOverride,
+      signal: opts.signal,
+    });
+    return toBaseline(verify);
+  } finally {
+    removeWorktree({ repo: opts.repo, tree });
+  }
+}
+
+export async function annotateBaseline(opts: {
+  repo: string;
+  verify: VerifyResult;
+  testCmdOverride?: string;
+  typecheckOverride?: string;
+  lintOverride?: string;
+  signal?: AbortSignal;
+}): Promise<VerifyResult> {
+  if (classifyTest(opts.verify) !== "failed") return opts.verify;
+  if (opts.verify.diffStat.trim() === "") return { ...opts.verify, alsoFailingOnBase: true };
+  const project = basename(opts.repo);
+  const sha = opts.verify.baseSha;
+  let record = readBaselineCache(project, sha);
+  if (record === undefined) {
+    record = await runBaselineWorktree({
+      repo: opts.repo,
+      sha,
+      testCmdOverride: opts.testCmdOverride,
+      typecheckOverride: opts.typecheckOverride,
+      lintOverride: opts.lintOverride,
+      signal: opts.signal,
+    });
+    writeBaselineCache(project, sha, record);
+  }
+  if (classifyExit(record.testCmd ?? opts.verify.testCmd, record.testExit) === "failed") {
+    return { ...opts.verify, alsoFailingOnBase: true };
+  }
+  return opts.verify;
 }

@@ -45,8 +45,11 @@ export type Event =
       typecheckExit?: number;
       lintCmd?: string;
       lintExit?: number;
+      alsoFailingOnBase?: boolean;
     }
   | { kind: "retry_started"; ts: string; runId: string; attempt: number }
+  | { kind: "pgid_recorded"; ts: string; runId: string; stepId: StepId; pgid: number }
+  | { kind: "push_recorded"; ts: string; runId: string; remote: string; branch: string }
   | {
       kind: "usage_recorded";
       ts: string;
@@ -70,6 +73,7 @@ export type VerifyResult = {
   typecheckExit?: number;
   lintCmd?: string;
   lintExit?: number;
+  alsoFailingOnBase?: boolean;
 };
 
 export type Usage = { stepId: StepId; inputTokens: number; outputTokens: number };
@@ -106,6 +110,7 @@ export type RunView = {
   reviewVerdict?: Verdict;
   reviewBody?: string;
   prUrl?: string;
+  pushedRemote?: string;
   errors: RunError[];
 };
 
@@ -218,7 +223,12 @@ export function outcome(view: RunView): Outcome {
   if (view.status === "failed" || view.agentTimedOut) return "fail";
   if (view.agentExit !== undefined && view.agentExit !== 0) return "fail";
   if (view.verify === undefined) return "fail";
-  if (classifyTest(view.verify) === "failed") return "fail";
+  if (classifyTest(view.verify) === "failed") {
+    if (view.verify.alsoFailingOnBase === true) {
+      return classifyDiff(view.verify) === "empty" ? "no-changes" : "changed-untested";
+    }
+    return "fail";
+  }
   if (classifyExit(view.verify.typecheckCmd, view.verify.typecheckExit) === "failed") return "fail";
   if (classifyExit(view.verify.lintCmd, view.verify.lintExit) === "failed") return "fail";
   return OUTCOME_TABLE[classifyDiff(view.verify)][classifyTest(view.verify)];
@@ -447,6 +457,7 @@ export function parseEvent(raw: unknown): Event {
           : {}),
         ...(typeof raw.lintCmd === "string" && raw.lintCmd.length > 0 ? { lintCmd: raw.lintCmd } : {}),
         ...(typeof raw.lintExit === "number" && Number.isFinite(raw.lintExit) ? { lintExit: raw.lintExit } : {}),
+        ...(raw.alsoFailingOnBase === true ? { alsoFailingOnBase: true } : {}),
       };
     case "retry_started":
       return {
@@ -471,6 +482,22 @@ export function parseEvent(raw: unknown): Event {
         runId: asNonEmpty(raw.runId, "runId"),
         verdict: asVerdict(raw.verdict),
         body: asString(raw.body, "body"),
+      };
+    case "pgid_recorded":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        stepId: asStepId(raw.stepId),
+        pgid: asNumber(raw.pgid, "pgid"),
+      };
+    case "push_recorded":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        remote: asNonEmpty(raw.remote, "remote"),
+        branch: asNonEmpty(raw.branch, "branch"),
       };
     case "pr_opened":
       return {

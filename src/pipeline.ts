@@ -19,7 +19,7 @@ import {
   type VerifyResult,
 } from "./domain.js";
 import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
-import { runVerify } from "./verify.js";
+import { runVerify, annotateBaseline } from "./verify.js";
 import { commitMessage, createRunWorktree, diffText, landDirtyWork, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
 import {
   agentStderrPath,
@@ -36,7 +36,7 @@ import {
   worktreePath,
   writeArtifacts,
 } from "./store.js";
-import { parseReview, renderReportFromFiles, summaryJson } from "./report.js";
+import { parseReview, renderReportFromFiles, summaryJson, verifyHeadlineLines } from "./report.js";
 
 export type PipelineOpts = {
   cwd: string;
@@ -76,6 +76,7 @@ function emitVerify(runId: RunId, verify: VerifyResult): void {
     ...(verify.typecheckExit === undefined ? {} : { typecheckExit: verify.typecheckExit }),
     ...(verify.lintCmd === undefined ? {} : { lintCmd: verify.lintCmd }),
     ...(verify.lintExit === undefined ? {} : { lintExit: verify.lintExit }),
+    ...(verify.alsoFailingOnBase === true ? { alsoFailingOnBase: true } : {}),
   });
 }
 
@@ -147,6 +148,7 @@ function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string, 
     });
     return;
   }
+  emit(runId, { kind: "push_recorded", ts: nowIso(), runId, remote, branch });
   if (findOnPath(["gh"]) === undefined) return;
   const auth = gh(["auth", "status"], cwd);
   if (auth.status !== 0) return;
@@ -273,6 +275,9 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         stderrPath: agentStderrPath(runId),
         timeoutMs,
         signal: ac.signal,
+        onStart: (pgid) => {
+          emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
+        },
       });
       agentCode = result.code ?? 1;
       timedOut = result.timedOut;
@@ -327,10 +332,18 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
     const runChecks = async (): Promise<VerifyResult> => {
       const testArgv = created.testCmd !== undefined ? ["sh", "-c", created.testCmd] : ["(detect)"];
       emit(runId, { kind: "step_started", ts: nowIso(), runId, step: { id: "verify", argv: testArgv } });
-      const verify = await runVerify({
+      let verify = await runVerify({
         cwd: tree,
         range,
         testOutPath: join(runDir(runId), "verify.out"),
+        testCmdOverride: created.testCmd,
+        typecheckOverride: created.typecheckCmd,
+        lintOverride: created.lintCmd,
+        signal: ac.signal,
+      });
+      verify = await annotateBaseline({
+        repo: created.cwd,
+        verify,
         testCmdOverride: created.testCmd,
         typecheckOverride: created.typecheckCmd,
         lintOverride: created.lintCmd,
@@ -350,7 +363,14 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
     let verify = await runChecks();
     if (ac.signal.aborted) return finish();
 
-    if (agentCode === 0 && !timedOut && classifyTest(verify) === "failed" && bin !== undefined) {
+    if (
+      agentCode === 0 &&
+      !timedOut &&
+      classifyTest(verify) === "failed" &&
+      verify.diffStat.trim() !== "" &&
+      verify.alsoFailingOnBase !== true &&
+      bin !== undefined
+    ) {
       emit(runId, { kind: "retry_started", ts: nowIso(), runId, attempt: 1 });
       const retryPrompt = join(runDir(runId), "retry-prompt.txt");
       writeFileSync(
@@ -373,6 +393,9 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         timeoutMs,
         signal: ac.signal,
         appendStdout: true,
+        onStart: (pgid) => {
+          emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
+        },
       });
       agentCode = retry.code ?? 1;
       timedOut = retry.timedOut;
@@ -415,7 +438,8 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
           [
             "list bugs and risks, then one line: APPROVE or REJECT",
             "",
-            "Tests:",
+            ...verifyHeadlineLines(verify),
+            "",
             verify.testTail,
             "",
             "Diff:",

@@ -28,3 +28,22 @@ test("parseEvent accepts run_created defaults and verify_recorded", () => {
   });
   assert.equal(v.kind, "verify_recorded");
 });
+
+test("parseEvent accepts pgid_recorded and push_recorded", () => {
+  const pgid = parseEvent({
+    kind: "pgid_recorded",
+    ts: "2026-09-04T12:00:00.000Z",
+    runId: "11111111-1111-1111-1111-111111111111",
+    stepId: "agent",
+    pgid: 4321,
+  });
+  assert.equal(pgid.kind, "pgid_recorded");
+  const pushed = parseEvent({
+    kind: "push_recorded",
+    ts: "2026-09-04T12:00:00.000Z",
+    runId: "11111111-1111-1111-1111-111111111111",
+    remote: "origin",
+    branch: "runhub/11111111-1111-1111-1111-111111111111",
+  });
+  assert.equal(pushed.kind, "push_recorded");
+});

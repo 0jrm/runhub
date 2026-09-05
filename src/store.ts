@@ -112,15 +112,28 @@ export function listRuns(now = Date.now()): ListedRun[] {
   return out;
 }
 
+function procState(pid: number): string | undefined {
+  try {
+    const text = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = text.lastIndexOf(")");
+    if (close < 0) return undefined;
+    const rest = text.slice(close + 2);
+    return rest[0];
+  } catch {
+    return undefined;
+  }
+}
+
 export function pidAlive(pid: number | undefined): boolean | undefined {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return undefined;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (err) {
     if (typeof err === "object" && err !== null && "code" in err && err.code === "EPERM") return true;
     return false;
   }
+  if (procState(pid) === "Z") return false;
+  return true;
 }
 
 export function tallyLine(runs: readonly ListedRun[], n = 30): string {

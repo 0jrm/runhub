@@ -11,6 +11,7 @@ import {
   type RunView,
   type TestKind,
   type Verdict,
+  type VerifyResult,
 } from "./domain.js";
 
 export function extractFinalMessage(raw: string): string {
@@ -105,7 +106,11 @@ function tookLine(view: RunView): string | undefined {
   return `took ${m}m ${String(s).padStart(2, "0")}s`;
 }
 
-function checkLine(label: string, cmd: string | undefined, exit: number | undefined): string | undefined {
+export function formatCmdExit(label: string, cmd: string, exit: number | undefined): string {
+  return `${label}: ${cmd}  exit ${exit ?? "?"}`;
+}
+
+export function checkLine(label: string, cmd: string | undefined, exit: number | undefined): string | undefined {
   const kind = classifyExit(cmd, exit);
   switch (kind) {
     case "absent":
@@ -114,12 +119,22 @@ function checkLine(label: string, cmd: string | undefined, exit: number | undefi
       return `${label}: ${cmd} (not found on PATH)`;
     case "passed":
     case "failed":
-      return `${label}: ${cmd}  exit ${exit ?? "?"}`;
+      return formatCmdExit(label, cmd ?? "", exit);
     default: {
       const _exhaustive: never = kind;
       throw new Error(`unhandled check kind: ${String(_exhaustive)}`);
     }
   }
+}
+
+export function verifyHeadlineLines(verify: VerifyResult): string[] {
+  const lines: string[] = [];
+  if (verify.testCmd !== undefined) lines.push(formatCmdExit("tests", verify.testCmd, verify.testExit));
+  const typecheck = checkLine("typecheck", verify.typecheckCmd, verify.typecheckExit);
+  if (typecheck !== undefined) lines.push(typecheck);
+  const lint = checkLine("lint", verify.lintCmd, verify.lintExit);
+  if (lint !== undefined) lines.push(lint);
+  return lines;
 }
 
 function testsBlock(view: RunView): string[] {
@@ -135,14 +150,16 @@ function testsBlock(view: RunView): string[] {
       lines.push(`tests: ${verify.testCmd} (not found on PATH)`);
       break;
     case "passed":
-      lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+      lines.push(formatCmdExit("tests", verify.testCmd ?? "", verify.testExit));
       break;
-    case "failed":
-      lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+    case "failed": {
+      const baseNote = verify.alsoFailingOnBase === true ? " (also failing on base)" : "";
+      lines.push(`${formatCmdExit("tests", verify.testCmd ?? "", verify.testExit)}${baseNote}`);
       if (verify.testTail.trim().length > 0) {
         lines.push(lastLines(verify.testTail, TEST_EXCERPT_LINES));
       }
       break;
+    }
     default: {
       const _exhaustive: never = kind;
       throw new Error(`unhandled test kind: ${String(_exhaustive)}`);
@@ -175,6 +192,9 @@ export function renderReport(
       lines.push(`pr: ${view.prUrl}`);
       lines.push(`merge: runhub merge ${view.runId}`);
     } else {
+      if (view.pushedRemote !== undefined) {
+        lines.push(`pushed: ${view.pushedRemote}/${view.branch}`);
+      }
       lines.push(`merge: ${mergeCommand(view.cwd, view.branch)}`);
     }
     lines.push("");

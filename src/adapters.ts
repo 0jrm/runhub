@@ -86,6 +86,7 @@ export function runProcessGroup(opts: {
   timeoutMs: number;
   signal?: AbortSignal;
   appendStdout?: boolean;
+  onStart?: (pgid: number) => void;
 }): Promise<SpawnResult> {
   const [file, ...args] = opts.argv;
   if (file === undefined) {
@@ -98,6 +99,9 @@ export function runProcessGroup(opts: {
       env: process.env,
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.on("spawn", () => {
+      if (child.pid !== undefined) opts.onStart?.(child.pid);
     });
     const pid = child.pid;
     let timedOut = false;

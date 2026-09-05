@@ -31,6 +31,14 @@ test("merge quotes the cwd so a path with spaces still runs", () => {
   assert.equal(mergeCommand("/tmp/it's", "runhub/x"), `git -C '/tmp/it'\\''s' merge runhub/x`);
 });
 
+test("pushed remote/branch appears when there is no PR", () => {
+  const v = view();
+  v.pushedRemote = "origin";
+  const md = renderReport(v, { agentStdout: "", agentStderr: "" });
+  assert.match(md, /^pushed: origin\/runhub\/11111111-1111-1111-1111-111111111111$/m);
+  assert.doesNotMatch(md, /^pr: /m);
+});
+
 test("report line one spells out changed-untested", () => {
   const v = view();
   assert.ok(v.verify);

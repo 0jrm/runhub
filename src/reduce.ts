@@ -65,10 +65,16 @@ export function reduce(events: readonly Event[]): RunView {
           ...(ev.typecheckExit === undefined ? {} : { typecheckExit: ev.typecheckExit }),
           ...(ev.lintCmd === undefined ? {} : { lintCmd: ev.lintCmd }),
           ...(ev.lintExit === undefined ? {} : { lintExit: ev.lintExit }),
+          ...(ev.alsoFailingOnBase === true ? { alsoFailingOnBase: true } : {}),
         };
         break;
       case "retry_started":
         view.retryAttempt = ev.attempt;
+        break;
+      case "pgid_recorded":
+        break;
+      case "push_recorded":
+        view.pushedRemote = ev.remote;
         break;
       case "usage_recorded":
         view.usages.push({

@@ -62,6 +62,19 @@ function linkIgnoredDeps(repo: string, tree: string): void {
   }
 }
 
+export function addDetachedWorktree(opts: { repo: string; tree: string; sha: string }): void {
+  const r = git(opts.repo, ["worktree", "add", "--detach", opts.tree, opts.sha]);
+  if (r.status !== 0) {
+    throw new Error(`git worktree add failed: ${r.stderr.trim() || r.stdout.trim()}`);
+  }
+  linkIgnoredDeps(opts.repo, opts.tree);
+}
+
+export function removeWorktree(opts: { repo: string; tree: string }): void {
+  git(opts.repo, ["worktree", "remove", "--force", opts.tree]);
+  git(opts.repo, ["worktree", "prune"]);
+}
+
 export function createRunWorktree(opts: { repo: string; tree: string; branch: string }): RunWorktree {
   const base = revParseHead(opts.repo);
   const r = git(opts.repo, ["worktree", "add", opts.tree, "-b", opts.branch, base]);

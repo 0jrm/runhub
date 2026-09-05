@@ -45,9 +45,9 @@ A fresh worktree has no `node_modules`, so runhub symlinks the gitignored `node_
 
 After tests, runhub runs typecheck and lint when the project declares them. It uses `package.json` `scripts.typecheck` and `scripts.lint`, or `[tool.mypy]` / `[tool.ruff]` in pyproject, or the `typecheck` / `lint` keys in `projects.toml`. Each gets a report line. Exit 126 or 127 is `(not found on PATH)` and does not fail the run.
 
-If tests ran and failed and the agent exited 0, runhub runs the same agent once more in that worktree with the test tail, commits, and verifies again.
+If tests ran and failed, runhub does not retry when `git diff --stat <base>` is empty. When the diff is not empty it checks the same test, typecheck, and lint commands once at the base sha in a throwaway worktree and caches that at `<dataRoot>/baseline/<project>-<sha>.json`. If the base already fails, there is no retry. The test line is `tests: <cmd>  exit N (also failing on base)` and the outcome is `changed, untested`. If the base passes, runhub runs the same agent once more in that worktree with the test tail, commits, and verifies again.
 
-If the project entry sets `remote`, runhub pushes `runhub/<runId>` to that git remote and, if `gh` is on PATH and `gh auth status` succeeds, opens a PR whose body is `report.md`. The report then has both `pr: <url>` and `merge: runhub merge <runId>`. Without `remote`, there is no push and the report keeps `merge: git -C <cwd> merge runhub/<runId>`.
+If the project entry sets `remote`, runhub pushes `runhub/<runId>` to that git remote and, if `gh` is on PATH and `gh auth status` succeeds, opens a PR whose body is `report.md`. The report then has both `pr: <url>` and `merge: runhub merge <runId>`. A push with no PR prints `pushed: <remote>/<branch>`. Without `remote`, there is no push and the report keeps `merge: git -C <cwd> merge runhub/<runId>`.
 
 ```bash
 runhub run --cwd /home/jrm22n/hycom --agent claude --prompt "add a smoke test"
@@ -59,9 +59,9 @@ runhub merge <runId>
 
 `merge` squash-merges the PR when one was opened. Otherwise it runs `git -C <cwd> merge runhub/<runId>`.
 
-The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. `fail` means the agent exited non-zero, timed out, or a test, typecheck, or lint command ran and exited non-zero. Review stays on its own line.
+The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. Tests that already fail at the base sha do not make the run `fail`: empty diff stays `no-changes`, a non-empty diff is `changed, untested`. `fail` means the agent exited non-zero, timed out, or a test, typecheck, or lint command ran and exited non-zero after a passing base. Review stays on its own line.
 
-The report starts with outcome, project name, and duration. Branch, then `pr:` and `merge:` when a PR opened. Diff-stat. Tests, retry, typecheck, lint. The agent binary and last message. On a failed agent, the last 20 lines of `agent.stderr`. Review binary and verdict if you asked for one. `runhub report <runId>` prints that stored file unchanged.
+The report starts with outcome, project name, and duration. Branch, then `pr:` and `merge:` when a PR opened, or `pushed:` when the branch was pushed and no PR opened. Diff-stat. Tests, retry, typecheck, lint. The agent binary and last message. On a failed agent, the last 20 lines of `agent.stderr`. Review binary and verdict if you asked for one. `runhub report <runId>` prints that stored file unchanged.
 
 ```bash
 runhub status
