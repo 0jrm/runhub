@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SPAWN_MAX_BUFFER } from "../src/domain.js";
-import { detectTestCmd, runVerify } from "../src/verify.js";
+import { detectLintCmd, detectTestCmd, detectTypecheckCmd, runVerify } from "../src/verify.js";
 import { gitRepo, headSha, restrictedPath, tempDir, withEnv, writeBin } from "./helpers.js";
 
 test("spawnSync maxBuffer is 64 MB", () => {
@@ -27,6 +27,19 @@ test("detectTestCmd requires scripts.test or a Makefile test target", () => {
   assert.deepEqual(detectTestCmd(root, "pytest -q"), { cmd: "pytest -q", cwd: root });
 });
 
+test("detectTypecheckCmd and detectLintCmd read package.json and pyproject", () => {
+  const root = mkdtempSync(join(tmpdir(), "runhub-checks-"));
+  assert.equal(detectTypecheckCmd(root), undefined);
+  writeFileSync(join(root, "package.json"), '{"scripts":{"typecheck":"tsc","lint":"eslint ."}}\n');
+  assert.deepEqual(detectTypecheckCmd(root), { cmd: "npm run typecheck", cwd: root });
+  assert.deepEqual(detectLintCmd(root), { cmd: "npm run lint", cwd: root });
+  writeFileSync(join(root, "pyproject.toml"), "[tool.mypy]\n[tool.ruff]\n");
+  const py = mkdtempSync(join(tmpdir(), "runhub-pycheck-"));
+  writeFileSync(join(py, "pyproject.toml"), "[tool.mypy]\n[tool.ruff]\n");
+  assert.deepEqual(detectTypecheckCmd(py), { cmd: "mypy", cwd: py });
+  assert.deepEqual(detectLintCmd(py), { cmd: "ruff check", cwd: py });
+});
+
 test("detectTestCmd finds pytest from pyproject, deps, or a tests/ dir", () => {
   const prev = process.env.PATH;
   process.env.PATH = tempDir("nopy");
@@ -47,23 +60,19 @@ test("detectTestCmd finds pytest from pyproject, deps, or a tests/ dir", () => {
   }
 });
 
-test("detectTestCmd reads markitdown's pyproject and finds pytest from the git root", () => {
-  const pkg = "/home/jrm22n/markitdown/packages/markitdown";
-  const py = join(pkg, "pyproject.toml");
-  assert.equal(existsSync(py), true, "markitdown pyproject must exist for this test");
+test("detectTestCmd uses packages/markitdown as cwd from a git-root pyproject layout", () => {
   const prev = process.env.PATH;
   process.env.PATH = tempDir("nopy");
   try {
-    const isolated = mkdtempSync(join(tmpdir(), "runhub-mdpy-"));
-    writeFileSync(join(isolated, "pyproject.toml"), readFileSync(py, "utf8"));
-    assert.equal(detectTestCmd(isolated), undefined);
-    mkdirSync(join(isolated, "tests"));
-    assert.deepEqual(detectTestCmd(isolated), { cmd: "pytest", cwd: isolated });
+    const root = mkdtempSync(join(tmpdir(), "runhub-mdpy-"));
+    const pkg = join(root, "packages", "markitdown");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "pyproject.toml"), "[project]\nname = \"markitdown\"\n");
+    assert.equal(detectTestCmd(root), undefined);
+    mkdirSync(join(pkg, "tests"));
+    assert.deepEqual(detectTestCmd(root), { cmd: "pytest", cwd: pkg });
+    writeFileSync(join(pkg, "pyproject.toml"), "[tool.pytest.ini_options]\n");
     assert.deepEqual(detectTestCmd(pkg), { cmd: "pytest", cwd: pkg });
-    assert.deepEqual(detectTestCmd("/home/jrm22n/markitdown"), {
-      cmd: "pytest",
-      cwd: pkg,
-    });
   } finally {
     process.env.PATH = prev;
   }

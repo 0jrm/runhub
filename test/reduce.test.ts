@@ -84,6 +84,12 @@ test("a reduced work_committed sha lands on the view", () => {
   assert.equal(view.commitSha, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 });
 
+test("REJECT review does not change a passing outcome", () => {
+  const view = reduceJsonl(readFileSync(fixture, "utf8"));
+  view.reviewVerdict = "REJECT";
+  assert.equal(outcome(view), "pass");
+});
+
 test("listOutcome marks unfinished runs past timeout as stale", () => {
   const view = reduceJsonl(readFileSync(fixture, "utf8"));
   view.status = "running";
@@ -91,4 +97,14 @@ test("listOutcome marks unfinished runs past timeout as stale", () => {
   view.timeoutMs = 1000;
   view.createdAt = "2020-01-01T00:00:00.000Z";
   assert.equal(listOutcome(view, Date.parse("2020-01-01T00:00:05.000Z")), "stale");
+});
+
+test("tests that already fail on base are not fail", () => {
+  const view = reduceJsonl(readFileSync(fixture, "utf8"));
+  assert.ok(view.verify);
+  view.verify.testExit = 1;
+  view.verify.alsoFailingOnBase = true;
+  assert.equal(outcome(view), "changed-untested");
+  view.verify.diffStat = "";
+  assert.equal(outcome(view), "no-changes");
 });

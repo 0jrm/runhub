@@ -20,11 +20,20 @@ export function reduce(events: readonly Event[]): RunView {
     review: first.review,
     timeoutMs: first.timeoutMs,
     errors: [],
+    usages: [],
+    ...(first.testCmd === undefined ? {} : { testCmd: first.testCmd }),
+    ...(first.typecheckCmd === undefined ? {} : { typecheckCmd: first.typecheckCmd }),
+    ...(first.lintCmd === undefined ? {} : { lintCmd: first.lintCmd }),
+    ...(first.remote === undefined ? {} : { remote: first.remote }),
   };
 
   for (const ev of events) {
     switch (ev.kind) {
       case "run_created":
+        break;
+      case "pipeline_started":
+        view.pipelinePid = ev.pid;
+        view.status = "running";
         break;
       case "base_recorded":
         view.baseSha = ev.baseSha;
@@ -37,6 +46,7 @@ export function reduce(events: readonly Event[]): RunView {
       case "step_started":
         view.status = "running";
         if (ev.step.id === "agent") view.agentArgv = ev.step.argv;
+        if (ev.step.id === "review") view.reviewArgv = ev.step.argv;
         break;
       case "step_finished":
         if (ev.stepId === "agent") {
@@ -51,11 +61,34 @@ export function reduce(events: readonly Event[]): RunView {
           testTail: ev.testTail,
           ...(ev.testCmd === undefined ? {} : { testCmd: ev.testCmd }),
           ...(ev.testExit === undefined ? {} : { testExit: ev.testExit }),
+          ...(ev.typecheckCmd === undefined ? {} : { typecheckCmd: ev.typecheckCmd }),
+          ...(ev.typecheckExit === undefined ? {} : { typecheckExit: ev.typecheckExit }),
+          ...(ev.lintCmd === undefined ? {} : { lintCmd: ev.lintCmd }),
+          ...(ev.lintExit === undefined ? {} : { lintExit: ev.lintExit }),
+          ...(ev.alsoFailingOnBase === true ? { alsoFailingOnBase: true } : {}),
         };
+        break;
+      case "retry_started":
+        view.retryAttempt = ev.attempt;
+        break;
+      case "pgid_recorded":
+        break;
+      case "push_recorded":
+        view.pushedRemote = ev.remote;
+        break;
+      case "usage_recorded":
+        view.usages.push({
+          stepId: ev.stepId,
+          inputTokens: ev.inputTokens,
+          outputTokens: ev.outputTokens,
+        });
         break;
       case "review_recorded":
         view.reviewVerdict = ev.verdict;
         view.reviewBody = ev.body;
+        break;
+      case "pr_opened":
+        view.prUrl = ev.url;
         break;
       case "error":
         view.errors.push(

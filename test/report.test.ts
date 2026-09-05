@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { reduceJsonl } from "../src/reduce.js";
 import { extractFinalMessage, mergeCommand, parseReview, renderReport } from "../src/report.js";
+import { extractUsages } from "../src/domain.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test/fixtures/sample.jsonl");
 
@@ -17,17 +18,25 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
     agentStdout: '{"type":"result","result":"patched the test"}\n',
     agentStderr: "",
   });
-  assert.match(md, /^pass\ntook 0m 7s\n\n/);
+  assert.match(md, /^pass  app  took 0m 07s\n\n/);
   assert.match(md, /files changed:\nsrc\/cli.ts \| 2 \+-/);
   assert.match(md, /branch: runhub\/11111111-1111-1111-1111-111111111111/);
   assert.match(md, /merge: git -C '\/tmp\/app' merge runhub\//);
   assert.doesNotMatch(md, /porcelain/);
-  assert.match(md, /agent:\npatched the test/);
+  assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
 });
 
 test("merge quotes the cwd so a path with spaces still runs", () => {
   assert.equal(mergeCommand("/tmp/my app", "runhub/x"), "git -C '/tmp/my app' merge runhub/x");
   assert.equal(mergeCommand("/tmp/it's", "runhub/x"), `git -C '/tmp/it'\\''s' merge runhub/x`);
+});
+
+test("pushed remote/branch appears when there is no PR", () => {
+  const v = view();
+  v.pushedRemote = "origin";
+  const md = renderReport(v, { agentStdout: "", agentStderr: "" });
+  assert.match(md, /^pushed: origin\/runhub\/11111111-1111-1111-1111-111111111111$/m);
+  assert.doesNotMatch(md, /^pr: /m);
 });
 
 test("report line one spells out changed-untested", () => {
@@ -36,7 +45,7 @@ test("report line one spells out changed-untested", () => {
   v.verify.testCmd = undefined;
   v.verify.testExit = undefined;
   const md = renderReport(v, { agentStdout: "", agentStderr: "" });
-  assert.equal(md.split("\n")[0], "changed, untested");
+  assert.equal(md.split("\n")[0], "changed, untested  app  took 0m 07s");
   assert.match(md, /tests: none/);
 });
 
@@ -57,7 +66,7 @@ test("a missing test binary is changed, untested, not an exit code", () => {
   v.verify.testExit = 127;
   v.verify.testTail = "sh: 1: pytest: not found\n";
   const md = renderReport(v, { agentStdout: "", agentStderr: "" });
-  assert.equal(md.split("\n")[0], "changed, untested");
+  assert.equal(md.split("\n")[0], "changed, untested  app  took 0m 07s");
   assert.match(md, /tests: pytest \(not found on PATH\)/);
   assert.doesNotMatch(md, /exit 127/);
   assert.doesNotMatch(md, /sh: 1: pytest: not found/);
@@ -105,6 +114,23 @@ test("parseReview reads the raw text, not just a result envelope", () => {
   assert.deepEqual(parseReview("").extra, []);
 });
 
+test("REJECT review keeps pass on line one", () => {
+  const v = view();
+  v.reviewVerdict = "REJECT";
+  v.reviewBody = "nope\nREJECT\n";
+  const md = renderReport(v, { agentStdout: "", agentStderr: "" });
+  assert.match(md, /^pass  app  took 0m 07s\n/);
+  assert.match(md, /review: REJECT/);
+});
+
+test("extractUsages reads cursor-agent result.usage camelCase and keeps counts under 1000 exact", () => {
+  const line =
+    '{"type":"result","subtype":"success","usage":{"inputTokens":18168,"outputTokens":179,"cacheReadTokens":22016,"cacheWriteTokens":0}}';
+  assert.deepEqual(extractUsages(`${line}\n`), [{ inputTokens: 18168, outputTokens: 179 }]);
+  const claude = '{"type":"result","usage":{"input_tokens":1500,"output_tokens":40}}\n';
+  assert.deepEqual(extractUsages(claude), [{ inputTokens: 1500, outputTokens: 40 }]);
+});
+
 test("extractFinalMessage keeps the last result and splits a glued sentence", () => {
   const two = ['{"type":"result","result":"first"}', '{"type":"result","result":"second"}'].join("\n");
   assert.equal(extractFinalMessage(two), "second");
@@ -122,6 +148,6 @@ test("a missing final message says so instead of dumping the json tail", () => {
   ).join("\n");
   assert.equal(extractFinalMessage(noisy), "(no final message)");
   const md = renderReport(view(), { agentStdout: noisy, agentStderr: "" });
-  assert.match(md, /agent:\n\(no final message\)/);
+  assert.match(md, /agent: cursor-agent \(cursor-agent\)\n\(no final message\)/);
   assert.doesNotMatch(md, /chunk-39/);
 });

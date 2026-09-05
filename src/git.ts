@@ -16,11 +16,11 @@ export type LandResult =
   | { didCommit: true; sha: string; porcelain: string }
   | { didCommit: false; sha: string; porcelain: string };
 
-function git(cwd: string, args: string[]): { status: number; stdout: string; stderr: string } {
+function git(cwd: string, args: string[], timeoutMs = 30_000): { status: number; stdout: string; stderr: string } {
   const r = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: timeoutMs,
     maxBuffer: SPAWN_MAX_BUFFER,
   });
   return {
@@ -60,6 +60,19 @@ function linkIgnoredDeps(repo: string, tree: string): void {
       continue;
     }
   }
+}
+
+export function addDetachedWorktree(opts: { repo: string; tree: string; sha: string }): void {
+  const r = git(opts.repo, ["worktree", "add", "--detach", opts.tree, opts.sha]);
+  if (r.status !== 0) {
+    throw new Error(`git worktree add failed: ${r.stderr.trim() || r.stdout.trim()}`);
+  }
+  linkIgnoredDeps(opts.repo, opts.tree);
+}
+
+export function removeWorktree(opts: { repo: string; tree: string }): void {
+  git(opts.repo, ["worktree", "remove", "--force", opts.tree]);
+  git(opts.repo, ["worktree", "prune"]);
 }
 
 export function createRunWorktree(opts: { repo: string; tree: string; branch: string }): RunWorktree {
@@ -109,4 +122,16 @@ export function diffText(cwd: string, range: DiffRange): string {
 
 export function diffStatText(cwd: string, range: DiffRange): string {
   return gitText(cwd, ["diff", "--stat", `${range.from}..${range.to}`]);
+}
+
+export function remoteUrl(cwd: string, remote: string): string | undefined {
+  const r = git(cwd, ["remote", "get-url", remote]);
+  if (r.status !== 0) return undefined;
+  const url = r.stdout.trim();
+  return url.length > 0 ? url : undefined;
+}
+
+export function pushBranch(cwd: string, remote: string, branch: string): { status: number; text: string } {
+  const r = git(cwd, ["push", "-u", remote, branch], 120_000);
+  return { status: r.status, text: `${r.stdout}${r.stderr}`.trimEnd() };
 }

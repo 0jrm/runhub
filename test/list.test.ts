@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { toRunId } from "../src/domain.js";
-import { listRuns, runDir } from "../src/store.js";
+import { listRuns, runDir, tallyLine } from "../src/store.js";
 
 test("listRuns shows project basename, outcome, and stale", () => {
   const prev = process.env.XDG_DATA_HOME;
@@ -95,6 +95,10 @@ test("listRuns shows project basename, outcome, and stale", () => {
     assert.equal(stale?.project, "markitdown");
     assert.equal(stale?.outcome, "stale");
     assert.equal(byId.get(untestedId)?.outcome, "changed-untested");
+    assert.equal(
+      tallyLine(listed),
+      "last 30: 0 pass, 1 fail, 1 changed-untested, 0 no-changes, 0 running",
+    );
   } finally {
     if (prev === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prev;
