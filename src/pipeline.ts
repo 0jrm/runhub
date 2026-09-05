@@ -88,13 +88,14 @@ async function runAgentStep(opts: {
   });
   log(`step ${opts.stepId} ${opts.persona}/${opts.provider} start`);
 
-  let result = await runCaptured({ argv: invoke.argv, cwd: opts.cwd });
+  let result = await runCaptured({ argv: invoke.argv, cwd: opts.cwd, timeoutMs: opts.cheap ? 90_000 : undefined });
   let stdout = result.stdout;
   if (opts.provider === "grok") {
     if (looksLikeJsonFail(result.stdout)) {
       result = await runCaptured({
         argv: grokTextFallbackArgv({ bin, prompt: opts.prompt, cwd: opts.cwd }),
         cwd: opts.cwd,
+        timeoutMs: opts.cheap ? 90_000 : undefined,
       });
       stdout = result.stdout;
     } else {
@@ -133,7 +134,15 @@ async function runAgentStep(opts: {
     exitCode: result.code ?? 1,
     ...(truncated ? { truncated: true } : {}),
   });
-  if (result.code !== 0) {
+  if (result.timedOut) {
+    emit(opts.runId, {
+      kind: "error",
+      ts: nowIso(),
+      runId: opts.runId,
+      stepId: opts.stepId,
+      message: `${opts.provider} timed out`,
+    });
+  } else if (result.code !== 0) {
     emit(opts.runId, {
       kind: "error",
       ts: nowIso(),
