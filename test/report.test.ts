@@ -21,9 +21,22 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
   assert.match(md, /^pass  app  took 0m 07s\n\n/);
   assert.match(md, /files changed:\nsrc\/cli.ts \| 2 \+-/);
   assert.match(md, /branch: runhub\/11111111-1111-1111-1111-111111111111/);
+  assert.match(md, /^sandbox: none$/m);
   assert.match(md, /merge: git -C '\/tmp\/app' merge runhub\//);
   assert.doesNotMatch(md, /porcelain/);
   assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
+});
+
+test("sandbox is line four when there is a branch", () => {
+  const md = renderReport(view(), { agentStdout: "", agentStderr: "" });
+  const lines = md.split("\n");
+  assert.equal(lines[3], "sandbox: none");
+  const v = view();
+  v.sandbox = "user";
+  v.depsWarnings = ["deps: node_modules not group-writable, tests may fail"];
+  const sandboxed = renderReport(v, { agentStdout: "", agentStderr: "" });
+  assert.equal(sandboxed.split("\n")[3], "sandbox: runhub-agent");
+  assert.match(sandboxed, /^deps: node_modules not group-writable, tests may fail$/m);
 });
 
 test("merge quotes the cwd so a path with spaces still runs", () => {
