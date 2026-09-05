@@ -43,6 +43,14 @@ remote = origin
   ]);
 });
 
+test("parseProjects reads sandbox", () => {
+  const projects = parseProjects(`[hycom]
+path = /tmp/hycom
+sandbox = none
+`);
+  assert.deepEqual(projects, [{ name: "hycom", path: "/tmp/hycom", sandbox: "none" }]);
+});
+
 test("parseProjects throws on a table with no path or on garbage", () => {
   assert.throws(() => parseProjects("[hycom]\ntest = true\n"), ParseError);
   assert.throws(() => parseProjects("not a toml line\n"), ParseError);
@@ -81,16 +89,25 @@ test("resolveRunCwd matches a project name, then a realpath, else resolve(raw)",
   const parent = tempDir("proj-linkp");
   const link = join(parent, "link");
   symlinkSync(dir, link);
-  const projects = [{ name: "toy", path: dir, test: "true" }];
-  assert.deepEqual(resolveRunCwd("toy", projects), { cwd: resolve(dir), test: "true" });
-  assert.deepEqual(resolveRunCwd(dir, projects), { cwd: resolve(dir), test: "true" });
-  assert.deepEqual(resolveRunCwd(link, projects), { cwd: resolve(link), test: "true" });
-  assert.deepEqual(resolveRunCwd("other", projects), { cwd: resolve("other") });
-  assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir }]), { cwd: resolve(dir) });
-  assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir, typecheck: "mypy", lint: "ruff check", remote: "origin" }]), {
+  const projects = [{ name: "toy", path: dir, test: "true", sandbox: "none" as const }];
+  assert.deepEqual(resolveRunCwd("toy", projects), { cwd: resolve(dir), test: "true", sandbox: "none" });
+  assert.deepEqual(resolveRunCwd(dir, projects), { cwd: resolve(dir), test: "true", sandbox: "none" });
+  assert.deepEqual(resolveRunCwd(link, projects), { cwd: resolve(link), test: "true", sandbox: "none" });
+  assert.deepEqual(resolveRunCwd("other", projects), { cwd: resolve("other"), sandbox: "none" });
+  assert.deepEqual(resolveRunCwd("toy", [{ name: "toy", path: dir, sandbox: "none" }]), {
     cwd: resolve(dir),
-    typecheck: "mypy",
-    lint: "ruff check",
-    remote: "origin",
+    sandbox: "none",
   });
+  assert.deepEqual(
+    resolveRunCwd("toy", [
+      { name: "toy", path: dir, typecheck: "mypy", lint: "ruff check", remote: "origin", sandbox: "none" },
+    ]),
+    {
+      cwd: resolve(dir),
+      typecheck: "mypy",
+      lint: "ruff check",
+      remote: "origin",
+      sandbox: "none",
+    },
+  );
 });

@@ -188,6 +188,10 @@ export function renderReport(
 
   if (view.branch) {
     lines.push(`branch: ${view.branch}`);
+  }
+  lines.push(`sandbox: ${view.sandbox === "user" ? "runhub-agent" : "none"}`);
+  for (const w of view.depsWarnings) lines.push(w);
+  if (view.branch) {
     if (view.prUrl !== undefined) {
       lines.push(`pr: ${view.prUrl}`);
       lines.push(`merge: runhub merge ${view.runId}`);
