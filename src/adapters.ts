@@ -9,6 +9,9 @@ export type SpawnResult = {
   aborted: boolean;
 };
 
+const KILL_GRACE_MS = 400;
+const GROUP_REAP_POLL_MS = 25;
+
 export function findOnPath(names: readonly string[]): string | undefined {
   const pathEnv = process.env.PATH ?? "";
   const dirs = pathEnv.split(delimiter);
@@ -71,7 +74,7 @@ export function agentArgv(opts: { agent: AgentKind; bin: string; cwd: string; mo
 }
 
 export function reviewArgv(bin: string, model: string): string[] {
-  return [bin, "-p", "--output-format", "text", "--model", model, "--dangerously-skip-permissions"];
+  return [bin, "-p", "--output-format", "text", "--model", model, "--tools", ""];
 }
 
 export function runProcessGroup(opts: {
@@ -99,14 +102,7 @@ export function runProcessGroup(opts: {
     let timedOut = false;
     let aborted = false;
     let settled = false;
-
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onAbort);
-      resolve({ code, timedOut, aborted });
-    };
+    let killing = false;
 
     const killGroup = (signal: NodeJS.Signals) => {
       if (pid === undefined) return;
@@ -121,12 +117,45 @@ export function runProcessGroup(opts: {
       }
     };
 
+    const groupGone = (): boolean => {
+      if (pid === undefined) return true;
+      try {
+        process.kill(-pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    const beginKill = () => {
+      if (killing) return;
+      killing = true;
+      killGroup("SIGTERM");
+      setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS).unref();
+    };
+
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+      if (!killing) {
+        resolve({ code, timedOut, aborted });
+        return;
+      }
+      const reap = setInterval(() => {
+        if (!groupGone()) {
+          killGroup("SIGKILL");
+          return;
+        }
+        clearInterval(reap);
+        resolve({ code, timedOut, aborted });
+      }, GROUP_REAP_POLL_MS);
+    };
+
     const onAbort = () => {
       aborted = true;
-      killGroup("SIGTERM");
-      setTimeout(() => {
-        if (!settled) killGroup("SIGKILL");
-      }, 400).unref();
+      beginKill();
     };
 
     if (opts.signal?.aborted) {
@@ -164,10 +193,7 @@ export function runProcessGroup(opts: {
 
     const timer = setTimeout(() => {
       timedOut = true;
-      killGroup("SIGTERM");
-      setTimeout(() => {
-        if (!settled) killGroup("SIGKILL");
-      }, 400).unref();
+      beginKill();
     }, opts.timeoutMs);
   });
 }

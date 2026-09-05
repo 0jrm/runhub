@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CURSOR_MODEL } from "../src/domain.js";
 import { agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
+import { tempDir, writeBin } from "./helpers.js";
 
 test("cursor argv pins Grok 4.6 medium, --force, and omits the prompt", () => {
   const argv = agentArgv({
@@ -25,7 +26,7 @@ test("claude argv uses stream-json and skip-permissions", () => {
   assert.equal(argv.includes("/tmp/app"), false);
 });
 
-test("review argv is print text with skip-permissions", () => {
+test("review argv is read-only print text with no tools", () => {
   const argv = reviewArgv("claude", "sonnet");
   assert.deepEqual(argv, [
     "claude",
@@ -34,8 +35,11 @@ test("review argv is print text with skip-permissions", () => {
     "text",
     "--model",
     "sonnet",
-    "--dangerously-skip-permissions",
+    "--tools",
+    "",
   ]);
+  assert.equal(argv.includes("--dangerously-skip-permissions"), false);
+  assert.equal(argv[argv.length - 1], "");
 });
 
 test("prompt arrives on stdin not argv", async () => {
@@ -92,4 +96,32 @@ test("abort signal kills the child and skips waiting for timeout", async () => {
   const result = await pending;
   assert.equal(result.aborted, true);
   assert.ok(Date.now() - started < 8000);
+});
+
+test("abort resolves only once the whole process group is gone", async () => {
+  const dir = tempDir("pgroup");
+  const pgidPath = join(dir, "pgid.txt");
+  const bin = writeBin(
+    dir,
+    "group-agent",
+    `#!/bin/sh
+echo $$ > "${pgidPath}"
+sleep 999 &
+sleep 999
+`,
+  );
+  const ac = new AbortController();
+  const pending = runProcessGroup({ argv: [bin], cwd: dir, timeoutMs: 30_000, signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 400));
+  ac.abort();
+  const result = await pending;
+  assert.equal(result.aborted, true);
+
+  const pgid = Number(readFileSync(pgidPath, "utf8").trim());
+  assert.ok(Number.isInteger(pgid) && pgid > 1, `bad pgid: ${pgid}`);
+  await new Promise((r) => setTimeout(r, 1000));
+  assert.throws(
+    () => process.kill(-pgid, 0),
+    (err: unknown) => (err as NodeJS.ErrnoException).code === "ESRCH",
+  );
 });

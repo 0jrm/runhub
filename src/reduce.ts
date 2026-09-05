@@ -31,6 +31,9 @@ export function reduce(events: readonly Event[]): RunView {
         view.branch = ev.branch;
         view.status = "running";
         break;
+      case "work_committed":
+        view.commitSha = ev.sha;
+        break;
       case "step_started":
         view.status = "running";
         if (ev.step.id === "agent") view.agentArgv = ev.step.argv;

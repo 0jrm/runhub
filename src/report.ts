@@ -1,5 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
-import { lastLines, outcome, type RunView, type Verdict } from "./domain.js";
+import {
+  TEST_EXCERPT_LINES,
+  classifyTest,
+  lastLines,
+  outcome,
+  outcomeLabel,
+  type RunView,
+  type Verdict,
+} from "./domain.js";
 
 export function extractFinalMessage(raw: string): string {
   const slice = raw.length > 256_000 ? raw.slice(raw.length - 256_000) : raw;
@@ -12,23 +20,19 @@ export function extractFinalMessage(raw: string): string {
       if (typeof obj !== "object" || obj === null) continue;
       const rec = obj as Record<string, unknown>;
       if (rec.type !== "result") continue;
-      for (const key of ["result", "message", "text", "content"] as const) {
-        const v = rec[key];
-        if (typeof v === "string" && v.trim().length > 0) found = v;
-      }
+      const v = rec.result;
+      if (typeof v === "string" && v.trim().length > 0) found = v;
     } catch {
       continue;
     }
   }
-  if (found !== undefined) return found.trim();
-  const tail = raw.slice(-2048).trim();
-  return tail.length > 0 ? tail : "(no agent message)";
+  if (found === undefined) return "(no final message)";
+  return found.trim().replace(/\.([A-Z])/g, ".\n\n$1");
 }
 
-export function parseReview(raw: string): { verdict: Verdict; bullets: string[] } {
-  const text = extractFinalMessage(raw);
-  const lines = text.split(/\r?\n/).map((l) => l.trim());
-  let verdict: Verdict = "unknown";
+export function parseReview(raw: string): { verdict: Verdict; extra: string[] } {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim());
+  let verdict: Verdict = "unparsed";
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (line === undefined || line.length === 0) continue;
@@ -41,20 +45,37 @@ export function parseReview(raw: string): { verdict: Verdict; bullets: string[] 
       break;
     }
   }
-  const bullets = lines.filter((l) => /^[-*]\s+/.test(l)).slice(0, 3);
-  return { verdict, bullets };
+  if (verdict === "unparsed") {
+    const tail = lastLines(raw, 3);
+    return { verdict, extra: tail.length === 0 ? [] : tail.split("\n") };
+  }
+  return { verdict, extra: lines.filter((l) => /^[-*]\s+/.test(l)).slice(0, 3) };
+}
+
+function posixQuote(value: string): string {
+  return `'${value.split("'").join(`'\\''`)}'`;
 }
 
 export function mergeCommand(cwd: string, branch: string): string {
-  return `git -C ${cwd} merge ${branch}`;
+  return `git -C ${posixQuote(cwd)} merge ${branch}`;
+}
+
+function tookLine(view: RunView): string | undefined {
+  if (view.finishedAt === undefined) return undefined;
+  const ms = Date.parse(view.finishedAt) - Date.parse(view.createdAt);
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  const seconds = Math.round(ms / 1000);
+  return `took ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 export function renderReport(
   view: RunView,
   extras: { agentStdout: string; agentStderr: string },
 ): string {
-  const result = outcome(view);
-  const lines: string[] = [result, ""];
+  const lines: string[] = [outcomeLabel(outcome(view))];
+  const took = tookLine(view);
+  if (took !== undefined) lines.push(took);
+  lines.push("");
 
   if (view.branch) {
     lines.push(`branch: ${view.branch}`);
@@ -68,13 +89,32 @@ export function renderReport(
   else lines.push(stat);
 
   lines.push("");
-  if (view.verify?.testCmd !== undefined) {
-    lines.push(`tests: ${view.verify.testCmd}  exit ${view.verify.testExit ?? "?"}`);
-    if (view.verify.testExit !== 0 && view.verify.testTail.trim().length > 0) {
-      lines.push(view.verify.testTail.trimEnd());
-    }
-  } else {
+  const verify = view.verify;
+  if (verify === undefined) {
     lines.push("tests: none");
+  } else {
+    const kind = classifyTest(verify);
+    switch (kind) {
+      case "absent":
+        lines.push("tests: none");
+        break;
+      case "missing":
+        lines.push(`tests: ${verify.testCmd} (not found on PATH)`);
+        break;
+      case "passed":
+        lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+        break;
+      case "failed":
+        lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+        if (verify.testTail.trim().length > 0) {
+          lines.push(lastLines(verify.testTail, TEST_EXCERPT_LINES));
+        }
+        break;
+      default: {
+        const _exhaustive: never = kind;
+        throw new Error(`unhandled test kind: ${String(_exhaustive)}`);
+      }
+    }
   }
 
   lines.push("");
@@ -89,8 +129,7 @@ export function renderReport(
   if (view.reviewVerdict !== undefined) {
     lines.push("");
     lines.push(`review: ${view.reviewVerdict}`);
-    const parsed = parseReview(view.reviewBody ?? "");
-    for (const b of parsed.bullets) lines.push(b);
+    for (const line of parseReview(view.reviewBody ?? "").extra) lines.push(line);
   }
 
   if (view.errors.length > 0) {

@@ -3,21 +3,39 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { DEFAULT_TIMEOUT_MS, defaultModel, type AgentKind, type ReviewKind } from "./domain.js";
+import {
+  DEFAULT_TIMEOUT_MS,
+  defaultModel,
+  type AgentKind,
+  type PromptSource,
+  type ReviewKind,
+} from "./domain.js";
+import { loadProjects, resolveRunCwd } from "./projects.js";
 import { listRuns, loadView, prune, reportPath, resolveRunId } from "./store.js";
 import { runPipeline } from "./pipeline.js";
 
 const USAGE = `runhub <command>
 
 Commands:
-  run --cwd <dir> --prompt <text> [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
+  run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
   status [runId]
   report [runId]
   list
   prune --keep <n>
+
+--prompt - reads the prompt from stdin. --prompt-file reads it from a file.
 `;
 
-const RUN_FLAGS = new Set(["cwd", "prompt", "timeout", "test-cmd", "agent", "model", "review"]);
+const RUN_FLAGS = new Set([
+  "cwd",
+  "prompt",
+  "prompt-file",
+  "timeout",
+  "test-cmd",
+  "agent",
+  "model",
+  "review",
+]);
 const PRUNE_FLAGS = new Set(["keep"]);
 
 type FlagMap = Map<string, string>;
@@ -78,6 +96,32 @@ function parseReview(raw: string | undefined): ReviewKind {
   throw new Error("--review must be claude or none");
 }
 
+function promptSource(flags: FlagMap): PromptSource {
+  const inline = flags.get("prompt");
+  const path = flags.get("prompt-file");
+  if (inline !== undefined && path !== undefined) {
+    throw new Error("pass either --prompt or --prompt-file, not both");
+  }
+  if (path !== undefined) return { kind: "file", path };
+  if (inline === undefined) throw new Error("run requires --prompt or --prompt-file");
+  return inline === "-" ? { kind: "stdin" } : { kind: "inline", text: inline };
+}
+
+function readPrompt(source: PromptSource): string {
+  switch (source.kind) {
+    case "inline":
+      return source.text;
+    case "file":
+      return readFileSync(source.path, "utf8");
+    case "stdin":
+      return readFileSync(0, "utf8");
+    default: {
+      const _exhaustive: never = source;
+      throw new Error(`unhandled prompt source: ${String(_exhaustive)}`);
+    }
+  }
+}
+
 function assertGitCwd(cwd: string): void {
   if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
     throw new Error(`--cwd is not a directory: ${cwd}`);
@@ -128,20 +172,18 @@ async function main(argv: string[]): Promise<number> {
     case "run": {
       const { flags } = parseFlags(rest, RUN_FLAGS);
       const cwdRaw = flags.get("cwd");
-      const prompt = flags.get("prompt");
-      if (cwdRaw === undefined || prompt === undefined) {
-        throw new Error("run requires --cwd and --prompt");
-      }
+      if (cwdRaw === undefined) throw new Error("run requires --cwd");
+      const prompt = readPrompt(promptSource(flags));
       const agent = parseAgent(flags.get("agent"));
       const review = parseReview(flags.get("review"));
       const timeoutMs = parseTimeout(flags.get("timeout"));
-      const cwd = resolve(cwdRaw);
-      assertGitCwd(cwd);
+      const resolved = resolveRunCwd(cwdRaw, loadProjects());
+      assertGitCwd(resolved.cwd);
       const result = await runPipeline({
-        cwd,
+        cwd: resolved.cwd,
         prompt,
         timeoutMs,
-        testCmd: flags.get("test-cmd"),
+        testCmd: flags.get("test-cmd") ?? resolved.test,
         agent,
         model: flags.get("model") ?? defaultModel(agent),
         review,

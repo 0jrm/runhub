@@ -52,6 +52,40 @@ test("listRuns shows project basename, outcome, and stale", () => {
       "utf8",
     );
 
+    const untestedId = toRunId("run-list-untest1");
+    mkdirSync(runDir(untestedId), { recursive: true });
+    writeFileSync(
+      join(runDir(untestedId), "events.jsonl"),
+      [
+        {
+          kind: "run_created",
+          ts: "2026-01-03T00:00:00.000Z",
+          runId: untestedId,
+          prompt: "p",
+          cwd: "/tmp/runhub",
+          timeoutMs: 1000,
+        },
+        {
+          kind: "verify_recorded",
+          ts: "2026-01-03T00:00:01.000Z",
+          runId: untestedId,
+          baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          diffStat: " src/cli.ts | 2 +-",
+          testTail: "no test command",
+        },
+        {
+          kind: "run_finished",
+          ts: "2026-01-03T00:00:02.000Z",
+          runId: untestedId,
+          status: "done",
+          summary: "changed-untested",
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
     const listed = listRuns(Date.parse("2026-01-01T00:00:05.000Z"));
     const byId = new Map(listed.map((r) => [r.runId, r]));
     const done = byId.get(doneId);
@@ -60,6 +94,7 @@ test("listRuns shows project basename, outcome, and stale", () => {
     assert.equal(done?.outcome, "fail");
     assert.equal(stale?.project, "markitdown");
     assert.equal(stale?.outcome, "stale");
+    assert.equal(byId.get(untestedId)?.outcome, "changed-untested");
   } finally {
     if (prev === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prev;

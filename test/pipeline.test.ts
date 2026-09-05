@@ -1,82 +1,244 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { runPipeline } from "../src/pipeline.js";
-import { porcelainPath, prune, reportPath, reviewPath, runsRoot, worktreePath } from "../src/store.js";
+import { porcelainPath, prune, reportPath, reviewPath, runDir, runsRoot, worktreePath } from "../src/store.js";
+import {
+  TRACKED_FILE,
+  UNTRACKED_FILE,
+  gitRepo,
+  headSha,
+  porcelainOf,
+  prependPath,
+  restrictedPath,
+  tempDir,
+  withEnv,
+  writeBin,
+  writeFakeAgent,
+} from "./helpers.js";
 
-function gitRepo(dir: string): void {
-  spawnSync("git", ["init"], { cwd: dir, encoding: "utf8" });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
-  writeFileSync(join(dir, "README"), "x\n");
-  writeFileSync(join(dir, "package.json"), '{"scripts":{"test":"true"}}\n');
-  spawnSync("git", ["add", "."], { cwd: dir });
-  spawnSync("git", ["commit", "-m", "init"], { cwd: dir });
+function mergeCommandOf(markdown: string): string {
+  const line = markdown.split("\n").find((l) => l.startsWith("merge: "));
+  assert.ok(line, `no merge line in report: ${markdown}`);
+  return line.slice("merge: ".length);
 }
 
-function withEnv(fn: () => Promise<void>): Promise<void> {
-  const prevXdg = process.env.XDG_DATA_HOME;
-  const prevPath = process.env.PATH;
-  const xdg = mkdtempSync(join(tmpdir(), "runhub-xdg-"));
-  process.env.XDG_DATA_HOME = xdg;
-  return fn().finally(() => {
-    if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
-    else process.env.XDG_DATA_HOME = prevXdg;
-    if (prevPath === undefined) delete process.env.PATH;
-    else process.env.PATH = prevPath;
-  });
-}
-
-test("verify diffs against pre-agent HEAD including commits; porcelain stays on disk", async () => {
+test("agent work is committed after the agent, so the branch and the diff carry it", async () => {
   await withEnv(async () => {
-    const work = mkdtempSync(join(tmpdir(), "runhub-work-"));
+    const work = tempDir("work");
     gitRepo(work);
-    const base = spawnSync("git", ["rev-parse", "HEAD"], { cwd: work, encoding: "utf8" }).stdout.trim();
-    const binDir = mkdtempSync(join(tmpdir(), "runhub-bin-"));
-    const argvLog = join(binDir, "argv.txt");
-    writeFileSync(
-      join(binDir, "cursor-agent"),
-      `#!/usr/bin/env python3
-import subprocess, sys
-open(${JSON.stringify(argvLog)}, "w").write(" ".join(sys.argv[1:]))
-open("STAMP.txt", "w").write("v03\\n")
-subprocess.check_call(["git", "add", "STAMP.txt"])
-subprocess.check_call(["git", "commit", "-m", "stamp"])
-print('{"type":"result","result":"committed STAMP.txt"}')
-`,
-    );
-    chmodSync(join(binDir, "cursor-agent"), 0o755);
-    process.env.PATH = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
-    const result = await runPipeline({ cwd: work, prompt: "add stamp", testCmd: "true", timeoutMs: 15_000 });
-    assert.match(result.markdown, /STAMP.txt/);
-    assert.match(result.markdown, /files changed:/);
-    assert.match(result.markdown, /branch: runhub\//);
-    assert.match(result.markdown, /merge: git -C /);
-    assert.doesNotMatch(result.markdown, /^[ M?]{2} /m);
-    assert.equal(existsSync(porcelainPath(result.runId)), true);
-    assert.ok(readFileSync(argvLog, "utf8").includes("--force"));
-    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
-    assert.match(events, new RegExp(base));
+    const base = headSha(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "  edit the readme\nand add a file  ",
+      testCmd: "true",
+      timeoutMs: 15_000,
+    });
+
     const tree = worktreePath(result.runId);
-    assert.equal(existsSync(join(tree, "STAMP.txt")), true);
-    assert.equal(existsSync(join(work, "STAMP.txt")), false);
+    const treeHead = headSha(tree);
+    assert.notEqual(treeHead, base);
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.equal(events.split('"work_committed"').length - 1, 1);
+    assert.match(events, new RegExp(`"work_committed"[^\\n]*"sha":"${treeHead}"`));
+
+    assert.match(result.markdown, /files changed:/);
+    assert.match(result.markdown, new RegExp(TRACKED_FILE));
+    assert.match(result.markdown, /NEW\.txt/);
+
+    assert.match(readFileSync(porcelainPath(result.runId), "utf8"), /\?\? NEW\.txt/);
+    assert.doesNotMatch(result.markdown, /^[ M?]{2} /m);
+    assert.equal(porcelainOf(tree).trim(), "");
+
+    const subject = spawnSync("git", ["log", "-1", "--format=%s"], { cwd: tree, encoding: "utf8" }).stdout.trim();
+    assert.equal(subject, "runhub: edit the readme and add a file");
+
+    const merge = spawnSync("sh", ["-c", mergeCommandOf(result.markdown)], { encoding: "utf8" });
+    assert.equal(merge.status, 0, merge.stderr);
+    assert.equal(existsSync(join(work, UNTRACKED_FILE)), true);
+    assert.match(readFileSync(join(work, TRACKED_FILE), "utf8"), /agent edit/);
     prune(0);
-    const branches = spawnSync("git", ["branch"], { cwd: work, encoding: "utf8" }).stdout;
-    assert.doesNotMatch(branches, /runhub\//);
   });
 });
 
-test("SIGINT abort skips verify and still writes report.md once", async () => {
+test("an agent that commits its own work gets no second commit", async () => {
   await withEnv(async () => {
-    const work = mkdtempSync(join(tmpdir(), "runhub-work-"));
+    const work = tempDir("work");
     gitRepo(work);
-    const binDir = mkdtempSync(join(tmpdir(), "runhub-bin-"));
-    writeFileSync(join(binDir, "cursor-agent"), "#!/bin/sh\nexec sleep 999\n");
-    chmodSync(join(binDir, "cursor-agent"), 0o755);
-    process.env.PATH = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
+    const base = headSha(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import subprocess
+open("STAMP.txt", "w").write("v031\\n")
+subprocess.check_call(["git", "add", "STAMP.txt"])
+subprocess.check_call(["git", "commit", "-q", "-m", "stamp"])
+print('{"type":"result","result":"committed STAMP.txt"}')
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+
+    const result = await runPipeline({ cwd: work, prompt: "stamp it", testCmd: "true", timeoutMs: 15_000 });
+
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.match(events, new RegExp(base));
+    assert.doesNotMatch(events, /work_committed/);
+    assert.match(result.markdown, /STAMP\.txt/);
+    assert.equal(readFileSync(porcelainPath(result.runId), "utf8").trim(), "");
+    assert.equal(existsSync(join(work, "STAMP.txt")), false);
+    prune(0);
+  });
+});
+
+test("the reviewer reads the committed diff, not the pre-commit tree", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const stdinLog = join(binDir, "review-stdin.txt");
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+import sys
+open(${JSON.stringify(stdinLog)}, "w").write(sys.stdin.read())
+print("- diff looks small")
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit and add",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+    });
+
+    const captured = readFileSync(stdinLog, "utf8");
+    const marker = captured.indexOf("Diff:");
+    assert.ok(marker > 0, `no Diff: section: ${captured}`);
+    const diff = captured.slice(marker);
+    assert.match(diff, new RegExp(TRACKED_FILE));
+    assert.match(diff, /NEW\.txt/);
+    assert.match(diff, /agent edit/);
+    assert.equal(existsSync(reviewPath(result.runId)), true);
+    assert.match(result.markdown, /review: APPROVE/);
+    prune(0);
+  });
+});
+
+test("gitignored dependency dirs are symlinked so tests can run in the worktree", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work, [
+      { path: ".gitignore", body: "node_modules\n" },
+      {
+        path: "package.json",
+        body: `${JSON.stringify(
+          { name: "depcheck", version: "1.0.0", scripts: { test: "node -e \"require('dep')\"" } },
+          null,
+          2,
+        )}\n`,
+      },
+    ]);
+    mkdirSync(join(work, "node_modules", "dep"), { recursive: true });
+    writeFileSync(join(work, "node_modules", "dep", "package.json"), '{"name":"dep","main":"index.js"}\n');
+    writeFileSync(join(work, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+
+    const result = await runPipeline({ cwd: work, prompt: "use the dep", timeoutMs: 60_000 });
+
+    const tree = worktreePath(result.runId);
+    assert.equal(lstatSync(join(tree, "node_modules")).isSymbolicLink(), true);
+    assert.match(result.markdown, /tests: npm test {2}exit 0/);
+    assert.doesNotMatch(result.markdown, /node_modules/);
+
+    prune(0);
+    assert.equal(existsSync(join(work, "node_modules", "dep", "index.js")), true);
+  });
+});
+
+test("a dependency dir the repo does not ignore is still left out of the commit", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import os
+os.makedirs("node_modules/junk", exist_ok=True)
+open("node_modules/junk/index.js", "w").write("module.exports = 1;\\n")
+open(${JSON.stringify(TRACKED_FILE)}, "a").write("agent edit\\n")
+print('{"type":"result","result":"installed junk"}')
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+
+    const result = await runPipeline({ cwd: work, prompt: "install junk", timeoutMs: 15_000 });
+
+    assert.match(result.markdown, /^changed, untested\n/);
+    assert.equal(result.failed, false);
+
+    const tree = worktreePath(result.runId);
+    const committed = spawnSync("git", ["show", "--stat", "--format=", "HEAD"], {
+      cwd: tree,
+      encoding: "utf8",
+    }).stdout;
+    assert.match(committed, new RegExp(TRACKED_FILE));
+    assert.doesNotMatch(committed, /node_modules/);
+    assert.match(porcelainOf(tree), /\?\? node_modules\//);
+    prune(0);
+  });
+});
+
+test("a failing test prints a 12-line excerpt and keeps the full log", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "break the tests",
+      testCmd: 'i=1; while [ $i -le 40 ]; do echo "line$i"; i=$((i+1)); done; exit 1',
+      timeoutMs: 20_000,
+    });
+
+    assert.match(result.markdown, /^fail\n/);
+    assert.match(result.markdown, /line40/);
+    assert.match(result.markdown, /line29/);
+    assert.doesNotMatch(result.markdown, /line28/);
+    const full = readFileSync(join(runDir(result.runId), "verify.out"), "utf8");
+    assert.equal(full.trimEnd().split("\n").length, 40);
+    assert.match(full, /line1\n/);
+    prune(0);
+  });
+});
+
+test("SIGINT abort skips land and verify and still writes report.md once", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(binDir, "cursor-agent", "#!/bin/sh\nexec sleep 999\n");
+    process.env.PATH = prependPath(binDir);
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 200);
     const result = await runPipeline({
@@ -89,66 +251,55 @@ test("SIGINT abort skips verify and still writes report.md once", async () => {
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /run_finished/);
     assert.doesNotMatch(events, /verify_recorded/);
+    assert.doesNotMatch(events, /work_committed/);
     assert.equal(events.split("run_finished").length - 1, 1);
     prune(0);
   });
 });
 
-test("agent stderr last 20 lines appear on non-zero exit", async () => {
+test("a non-zero agent still lands its work and shows 20 stderr lines", async () => {
   await withEnv(async () => {
-    const work = mkdtempSync(join(tmpdir(), "runhub-work-"));
+    const work = tempDir("work");
     gitRepo(work);
-    const binDir = mkdtempSync(join(tmpdir(), "runhub-bin-"));
-    writeFileSync(
-      join(binDir, "cursor-agent"),
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
       `#!/usr/bin/env python3
 import sys
+open(${JSON.stringify(TRACKED_FILE)}, "a").write("half done\\n")
 for i in range(25):
     print(f"err{i}", file=sys.stderr)
 sys.exit(2)
 `,
     );
-    chmodSync(join(binDir, "cursor-agent"), 0o755);
-    process.env.PATH = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
+    process.env.PATH = prependPath(binDir);
     const result = await runPipeline({ cwd: work, prompt: "fail", testCmd: "true", timeoutMs: 10_000 });
+    assert.match(result.markdown, /^fail\n/);
     assert.match(result.markdown, /stderr:\nerr5/);
     assert.doesNotMatch(result.markdown, /err4\n/);
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.match(events, /work_committed/);
+    assert.match(result.markdown, new RegExp(`files changed:\\n[^]*${TRACKED_FILE}`));
     prune(0);
   });
 });
 
-test("review claude writes review.md and a verdict line", async () => {
+test("a missing pytest binary is changed-untested, not fail", async () => {
   await withEnv(async () => {
-    const work = mkdtempSync(join(tmpdir(), "runhub-work-"));
-    gitRepo(work);
-    const binDir = mkdtempSync(join(tmpdir(), "runhub-bin-"));
-    writeFileSync(
-      join(binDir, "cursor-agent"),
-      `#!/usr/bin/env python3
-print('{"type":"result","result":"ok"}')
-`,
-    );
-    writeFileSync(
-      join(binDir, "claude"),
-      `#!/usr/bin/env python3
-import sys
-sys.stdin.read()
-print("- risk of empty diff")
-print("APPROVE")
-`,
-    );
-    chmodSync(join(binDir, "cursor-agent"), 0o755);
-    chmodSync(join(binDir, "claude"), 0o755);
-    process.env.PATH = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
-    const result = await runPipeline({
-      cwd: work,
-      prompt: "noop",
-      testCmd: "true",
-      review: "claude",
-      timeoutMs: 10_000,
-    });
-    assert.equal(existsSync(reviewPath(result.runId)), true);
-    assert.match(result.markdown, /review: APPROVE/);
+    const work = tempDir("work");
+    gitRepo(work, [
+      { path: "packages/x/pyproject.toml", body: "[project]\nname = \"x\"\n" },
+      { path: "packages/x/tests/test_ok.py", body: "def test_ok():\n    assert True\n" },
+    ]);
+    const binDir = restrictedPath(["git", "sh", "python3"]);
+    writeFakeAgent(binDir);
+    process.env.PATH = binDir;
+    const result = await runPipeline({ cwd: work, prompt: "edit", timeoutMs: 20_000 });
+    assert.equal(result.failed, false);
+    assert.match(result.markdown, /^changed, untested\n/);
+    assert.match(result.markdown, /tests: pytest \(not found on PATH\)/);
+    assert.doesNotMatch(result.markdown, /exit 12[67]/);
     prune(0);
   });
 });

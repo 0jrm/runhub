@@ -1,7 +1,12 @@
 export type AgentKind = "cursor" | "claude";
 export type ReviewKind = "claude" | "none";
 export type StepId = "agent" | "verify" | "review";
-export type Verdict = "APPROVE" | "REJECT" | "unknown";
+export type Verdict = "APPROVE" | "REJECT" | "unparsed";
+export type DiffRange = { from: string; to: string };
+export type PromptSource =
+  | { kind: "inline"; text: string }
+  | { kind: "file"; path: string }
+  | { kind: "stdin" };
 
 declare const runIdBrand: unique symbol;
 export type RunId = string & { readonly [runIdBrand]: "RunId" };
@@ -19,6 +24,7 @@ export type Event =
       timeoutMs: number;
     }
   | { kind: "base_recorded"; ts: string; runId: string; baseSha: string; branch: string }
+  | { kind: "work_committed"; ts: string; runId: string; sha: string }
   | { kind: "step_started"; ts: string; runId: string; step: { id: StepId; argv: string[] } }
   | { kind: "step_finished"; ts: string; runId: string; stepId: StepId; exitCode: number; timedOut?: boolean }
   | {
@@ -59,6 +65,7 @@ export type RunView = {
   timeoutMs: number;
   baseSha?: string;
   branch?: string;
+  commitSha?: string;
   agentArgv?: string[];
   agentExit?: number;
   agentTimedOut?: boolean;
@@ -68,9 +75,28 @@ export type RunView = {
   errors: RunError[];
 };
 
-export type Outcome = "pass" | "fail" | "no-changes";
+export type Outcome = "pass" | "fail" | "no-changes" | "changed-untested";
+
+export type DiffKind = "empty" | "changed";
+export type TestKind = "absent" | "passed" | "failed" | "missing";
+
+export const OUTCOME_TABLE = {
+  empty: {
+    absent: "no-changes",
+    passed: "no-changes",
+    failed: "fail",
+    missing: "no-changes",
+  },
+  changed: {
+    absent: "changed-untested",
+    passed: "pass",
+    failed: "fail",
+    missing: "changed-untested",
+  },
+} as const satisfies Record<DiffKind, Record<TestKind, Outcome>>;
 
 export const TEST_TAIL_BYTES = 4096;
+export const TEST_EXCERPT_LINES = 12;
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 export const TEST_TIMEOUT_MS = 10 * 60 * 1000;
 export const SPAWN_MAX_BUFFER = 64 * 1024 * 1024;
@@ -130,14 +156,46 @@ export function lastLines(text: string, n: number): string {
   return lines.slice(-n).join("\n");
 }
 
+function classifyDiff(verify: VerifyResult): DiffKind {
+  return verify.diffStat.trim() === "" ? "empty" : "changed";
+}
+
+export function classifyTest(verify: VerifyResult): TestKind {
+  if (verify.testCmd === undefined) return "absent";
+  switch (verify.testExit) {
+    case 0:
+      return "passed";
+    case 126:
+    case 127:
+      return "missing";
+    default:
+      return "failed";
+  }
+}
+
 export function outcome(view: RunView): Outcome {
   if (view.status === "failed" || view.agentTimedOut) return "fail";
   if (view.agentExit !== undefined && view.agentExit !== 0) return "fail";
   if (view.verify === undefined) return "fail";
-  if (view.verify.testCmd !== undefined && view.verify.testExit !== 0) return "fail";
   if (view.reviewVerdict === "REJECT") return "fail";
-  if (view.verify.diffStat.trim() === "") return "no-changes";
-  return "pass";
+  return OUTCOME_TABLE[classifyDiff(view.verify)][classifyTest(view.verify)];
+}
+
+export function outcomeLabel(result: Outcome): string {
+  switch (result) {
+    case "pass":
+      return "pass";
+    case "fail":
+      return "fail";
+    case "no-changes":
+      return "no-changes";
+    case "changed-untested":
+      return "changed, untested";
+    default: {
+      const _exhaustive: never = result;
+      throw new Error(`unhandled outcome: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 export function listOutcome(view: RunView, now = Date.now()): Outcome | "running" | "stale" {
@@ -193,7 +251,8 @@ function asStepId(x: unknown): StepId {
 }
 
 function asVerdict(x: unknown): Verdict {
-  if (x === "APPROVE" || x === "REJECT" || x === "unknown") return x;
+  if (x === "APPROVE" || x === "REJECT" || x === "unparsed") return x;
+  if (x === "unknown") return "unparsed";
   throw new ParseError("invalid verdict");
 }
 
@@ -238,6 +297,13 @@ export function parseEvent(raw: unknown): Event {
         runId: asNonEmpty(raw.runId, "runId"),
         baseSha: asNonEmpty(raw.baseSha, "baseSha"),
         branch: asNonEmpty(raw.branch, "branch"),
+      };
+    case "work_committed":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        sha: asNonEmpty(raw.sha, "sha"),
       };
     case "step_started":
       return {

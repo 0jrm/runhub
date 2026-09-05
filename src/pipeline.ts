@@ -12,8 +12,8 @@ import {
   type RunId,
 } from "./domain.js";
 import { agentArgv, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
-import { diffAgainstBase, runVerify } from "./verify.js";
-import { addRunWorktree, revParseHead } from "./git.js";
+import { runVerify } from "./verify.js";
+import { createRunWorktree, diffText, landDirtyWork } from "./git.js";
 import {
   agentStderrPath,
   agentStdoutPath,
@@ -28,7 +28,7 @@ import {
   worktreePath,
   writeArtifacts,
 } from "./store.js";
-import { extractFinalMessage, parseReview, renderReportFromFiles, summaryJson } from "./report.js";
+import { parseReview, renderReportFromFiles, summaryJson } from "./report.js";
 
 export type PipelineOpts = {
   cwd: string;
@@ -110,11 +110,10 @@ export async function runPipeline(opts: PipelineOpts): Promise<PipelineResult> {
 
   try {
     mkdirSync(runDir(runId), { recursive: true });
-    const baseSha = revParseHead(opts.cwd);
     const branch = branchName(runId);
     const tree = worktreePath(runId);
-    addRunWorktree({ repo: opts.cwd, tree, branch, base: baseSha });
-    emit(runId, { kind: "base_recorded", ts: nowIso(), runId, baseSha, branch });
+    const wt = createRunWorktree({ repo: opts.cwd, tree, branch });
+    emit(runId, { kind: "base_recorded", ts: nowIso(), runId, baseSha: wt.base, branch });
     writeFileSync(promptPath(runId), opts.prompt, "utf8");
 
     if (ac.signal.aborted) return finish();
@@ -187,6 +186,17 @@ export async function runPipeline(opts: PipelineOpts): Promise<PipelineResult> {
 
     if (ac.signal.aborted) return finish();
 
+    const land = landDirtyWork(wt, opts.prompt);
+    writeFileSync(
+      porcelainPath(runId),
+      land.porcelain.endsWith("\n") ? land.porcelain : `${land.porcelain}\n`,
+      "utf8",
+    );
+    if (land.didCommit) {
+      emit(runId, { kind: "work_committed", ts: nowIso(), runId, sha: land.sha });
+    }
+    const range = { from: wt.base, to: land.sha };
+
     const testArgv = opts.testCmd !== undefined ? ["sh", "-c", opts.testCmd] : ["(detect)"];
     emit(runId, {
       kind: "step_started",
@@ -196,8 +206,7 @@ export async function runPipeline(opts: PipelineOpts): Promise<PipelineResult> {
     });
     const verify = await runVerify({
       cwd: tree,
-      baseSha,
-      porcelainPath: porcelainPath(runId),
+      range,
       testOutPath: join(runDir(runId), "verify.out"),
       testCmdOverride: opts.testCmd,
       signal: ac.signal,
@@ -242,7 +251,7 @@ export async function runPipeline(opts: PipelineOpts): Promise<PipelineResult> {
         emit(runId, { kind: "step_finished", ts: nowIso(), runId, stepId: "review", exitCode: 127 });
       } else {
         const reviewPrompt = join(runDir(runId), "review-prompt.txt");
-        const diff = diffAgainstBase(tree, baseSha);
+        const diff = diffText(tree, range);
         writeFileSync(
           reviewPrompt,
           [
@@ -273,7 +282,7 @@ export async function runPipeline(opts: PipelineOpts): Promise<PipelineResult> {
           ts: nowIso(),
           runId,
           verdict: parsed.verdict,
-          body: extractFinalMessage(raw),
+          body: raw,
         });
         emit(runId, {
           kind: "step_finished",
