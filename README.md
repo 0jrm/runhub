@@ -6,9 +6,13 @@ It does not drive the Cursor IDE. It does not merge IDE, CLI, or cloud sessions 
 
 ## Install
 
-From a clone, after `npm run build`:
+From GitHub:
 
 ```bash
+git clone https://github.com/0jrm/runhub.git
+cd runhub
+npm install
+npm run build
 npm install -g .
 ```
 

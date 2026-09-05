@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Blocking CLI that records a Run as an event log, delegates to cursor-agent, claude, and grok, and prints a markdown report.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0jrm/runhub.git"
+  },
   "type": "module",
   "bin": {
     "runhub": "./dist/cli.js"
