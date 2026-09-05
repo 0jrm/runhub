@@ -16,7 +16,7 @@ npm install -g .
 
 ## Everyday use
 
-Point at a git repo. Say the job. Wait.
+Point at a git repo. Say the job. Wait. `--cwd` can be a filesystem path or a name from `~/.config/runhub/projects.toml`. A `test` key in that file wins over detection. `--test-cmd` wins over both.
 
 ```bash
 runhub run --cwd /home/jrm22n/some-project --prompt "fix the login bug"
@@ -33,7 +33,7 @@ cat /tmp/spec.md | runhub run --cwd /home/jrm22n/hycom --prompt -
 
 When the agent exits, runhub commits whatever it left dirty in the worktree as `runhub: <first 60 chars of the prompt>`, so the branch holds the work whether or not the agent committed anything itself. Dependency directories are never committed. Everything after that reads the committed range `<base>..<commit>`. Diff-stat goes in the phone report. The pre-commit `git status --porcelain` stays in `porcelain.txt` on disk.
 
-A fresh worktree has no `node_modules`, so runhub symlinks the gitignored `node_modules`, `.venv`, `venv`, `target`, and `.tox` from the real repo into the worktree. `npm test` and `pytest` work in the worktree without an install step. Tests run if `package.json` has `scripts.test` (`npm test`), the Makefile has a `test:` target (`make test`), or a `pyproject.toml` has `[tool.pytest*]`, a `pytest` dependency, or a `tests/` directory next to it (`pytest`). Runhub also looks under `packages/*` for that pyproject and runs `pytest` with that directory as cwd. Otherwise the report says `tests: none`. Override with `--test-cmd`.
+A fresh worktree has no `node_modules`, so runhub symlinks the gitignored `node_modules`, `.venv`, `venv`, `target`, and `.tox` from the real repo into the worktree. `npm test` and `pytest` work in the worktree without an install step. Tests run if `package.json` has `scripts.test` (`npm test`), the Makefile has a `test:` target (`make test`), or a `pyproject.toml` has `[tool.pytest*]`, a `pytest` dependency, or a `tests/` directory next to it. Runhub also looks under `packages/*` for that pyproject and runs tests with that directory as cwd. The command is `.venv/bin/pytest` if that file is executable under the search root, otherwise `python -m pytest` if importable, otherwise `pytest`. Otherwise the report says `tests: none`. Override with `--test-cmd`.
 
 ```bash
 runhub run --cwd /home/jrm22n/hycom --agent claude --prompt "add a smoke test"
@@ -42,7 +42,7 @@ runhub run --cwd /home/jrm22n/hycom --review claude --prompt "fix the login bug"
 
 `--agent` is `cursor` or `claude` (default cursor). `--model` overrides the per-agent default. `--review claude` runs after verify, reads the committed diff plus the test tail, and must end with APPROVE or REJECT. The reviewer runs read-only, with no tools.
 
-The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command gets `changed, untested`, never `pass`. `no-changes` means an empty diff. `fail` means a blocker: a failed run, a timeout, a non-zero agent, a REJECT, or a failing test command.
+The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. `fail` means a blocker: a failed run, a timeout, a non-zero agent, a REJECT, or a failing test command.
 
 Stdout is the phone report. Outcome. How long it took. Branch and merge command. Diff-stat. Tests, with a 12-line excerpt on failure and the full log in `verify.out`. The agent's last message. On a failed agent, the last 20 lines of `agent.stderr`. Review verdict if you asked for one. The last stdout line is `runhub: <runId> <reportPath>` so the phone `full:` link is a real file.
 

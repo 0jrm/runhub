@@ -12,6 +12,7 @@ import {
   headSha,
   porcelainOf,
   prependPath,
+  restrictedPath,
   tempDir,
   withEnv,
   writeBin,
@@ -280,6 +281,25 @@ sys.exit(2)
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /work_committed/);
     assert.match(result.markdown, new RegExp(`files changed:\\n[^]*${TRACKED_FILE}`));
+    prune(0);
+  });
+});
+
+test("a missing pytest binary is changed-untested, not fail", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work, [
+      { path: "packages/x/pyproject.toml", body: "[project]\nname = \"x\"\n" },
+      { path: "packages/x/tests/test_ok.py", body: "def test_ok():\n    assert True\n" },
+    ]);
+    const binDir = restrictedPath(["git", "sh", "python3"]);
+    writeFakeAgent(binDir);
+    process.env.PATH = binDir;
+    const result = await runPipeline({ cwd: work, prompt: "edit", timeoutMs: 20_000 });
+    assert.equal(result.failed, false);
+    assert.match(result.markdown, /^changed, untested\n/);
+    assert.match(result.markdown, /tests: pytest \(not found on PATH\)/);
+    assert.doesNotMatch(result.markdown, /exit 12[67]/);
     prune(0);
   });
 });

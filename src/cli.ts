@@ -10,13 +10,14 @@ import {
   type PromptSource,
   type ReviewKind,
 } from "./domain.js";
+import { loadProjects, resolveRunCwd } from "./projects.js";
 import { listRuns, loadView, prune, reportPath, resolveRunId } from "./store.js";
 import { runPipeline } from "./pipeline.js";
 
 const USAGE = `runhub <command>
 
 Commands:
-  run --cwd <dir> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
+  run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
   status [runId]
   report [runId]
   list
@@ -176,13 +177,13 @@ async function main(argv: string[]): Promise<number> {
       const agent = parseAgent(flags.get("agent"));
       const review = parseReview(flags.get("review"));
       const timeoutMs = parseTimeout(flags.get("timeout"));
-      const cwd = resolve(cwdRaw);
-      assertGitCwd(cwd);
+      const resolved = resolveRunCwd(cwdRaw, loadProjects());
+      assertGitCwd(resolved.cwd);
       const result = await runPipeline({
-        cwd,
+        cwd: resolved.cwd,
         prompt,
         timeoutMs,
-        testCmd: flags.get("test-cmd"),
+        testCmd: flags.get("test-cmd") ?? resolved.test,
         agent,
         model: flags.get("model") ?? defaultModel(agent),
         review,

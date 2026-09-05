@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,18 +50,21 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   assert.notEqual(review.status, 0);
   assert.match(review.stderr, /--review must be claude or none/);
 
+  const cfg = mkdtempSync(join(tmpdir(), "runhub-cli-cfg-"));
   const missing = spawnSync(
     process.execPath,
     [cli, "run", "--cwd", join(tmpdir(), "no-such-runhub-dir"), "--prompt", "x"],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: { ...process.env, XDG_CONFIG_HOME: cfg } },
   );
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /not a directory/);
 
   const prev = process.env.XDG_DATA_HOME;
+  const prevCfg = process.env.XDG_CONFIG_HOME;
   const xdg = mkdtempSync(join(tmpdir(), "runhub-cli-xdg-"));
   const bare = mkdtempSync(join(tmpdir(), "runhub-nongit-"));
   process.env.XDG_DATA_HOME = xdg;
+  process.env.XDG_CONFIG_HOME = xdg;
   try {
     const nongit = spawnSync(process.execPath, [cli, "run", "--cwd", bare, "--prompt", "x"], {
       encoding: "utf8",
@@ -72,6 +75,8 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   } finally {
     if (prev === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prev;
+    if (prevCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevCfg;
   }
 });
 
@@ -86,6 +91,7 @@ test("run stdout last line is the runhub trailer", () => {
   const env = {
     ...process.env,
     XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
     PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
   };
   try {
@@ -109,7 +115,7 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
   const binDir = tempDir("cli-prompt-bin");
   gitRepo(work);
   writeFakeAgent(binDir);
-  const env = { ...process.env, XDG_DATA_HOME: xdg, PATH: prependPath(binDir) };
+  const env = { ...process.env, XDG_DATA_HOME: xdg, XDG_CONFIG_HOME: xdg, PATH: prependPath(binDir) };
   const spec = "line one\nline two\n";
   const specPath = join(binDir, "spec.md");
   writeFileSync(specPath, spec);
@@ -160,6 +166,7 @@ test("SIGINT aborts the CLI run and still prints one trailer", async () => {
   const env = {
     ...process.env,
     XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
     PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
   };
   const child = spawn(
@@ -184,4 +191,39 @@ test("SIGINT aborts the CLI run and still prints one trailer", async () => {
   const events = readFileSync(join(xdg, "runhub", "runs", m[1], "events.jsonl"), "utf8");
   assert.equal(events.split("run_finished").length - 1, 1);
   assert.doesNotMatch(events, /verify_recorded/);
+});
+
+test("--cwd accepts a project name and uses that project's test", () => {
+  const xdg = tempDir("cli-name-xdg");
+  const work = tempDir("cli-name-work");
+  const binDir = tempDir("cli-name-bin");
+  gitRepo(work, [{ path: "package.json", body: '{"scripts":{"test":"node --test"}}\n' }]);
+  writeFakeAgent(binDir);
+  mkdirSync(join(xdg, "runhub"), { recursive: true });
+  writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "true"\n`);
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
+    PATH: prependPath(binDir),
+  };
+  const named = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", "toy", "--prompt", "x", "--timeout", "20s"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stdout, /tests: true {2}exit 0/);
+  assert.doesNotMatch(named.stdout, /npm test/);
+  assert.doesNotMatch(named.stdout, /pytest/);
+
+  writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "false"\n`);
+  const override = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", "toy", "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(override.status, 0, override.stderr);
+  assert.match(override.stdout, /tests: true {2}exit 0/);
+  assert.doesNotMatch(override.stdout, /tests: false/);
 });

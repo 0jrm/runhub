@@ -78,12 +78,22 @@ export type RunView = {
 export type Outcome = "pass" | "fail" | "no-changes" | "changed-untested";
 
 export type DiffKind = "empty" | "changed";
-export type TestKind = "absent" | "passed" | "failed";
+export type TestKind = "absent" | "passed" | "failed" | "missing";
 
 export const OUTCOME_TABLE = {
-  empty: { absent: "no-changes", passed: "no-changes" },
-  changed: { absent: "changed-untested", passed: "pass" },
-} as const;
+  empty: {
+    absent: "no-changes",
+    passed: "no-changes",
+    failed: "fail",
+    missing: "no-changes",
+  },
+  changed: {
+    absent: "changed-untested",
+    passed: "pass",
+    failed: "fail",
+    missing: "changed-untested",
+  },
+} as const satisfies Record<DiffKind, Record<TestKind, Outcome>>;
 
 export const TEST_TAIL_BYTES = 4096;
 export const TEST_EXCERPT_LINES = 12;
@@ -150,9 +160,17 @@ function classifyDiff(verify: VerifyResult): DiffKind {
   return verify.diffStat.trim() === "" ? "empty" : "changed";
 }
 
-function classifyTest(verify: VerifyResult): TestKind {
+export function classifyTest(verify: VerifyResult): TestKind {
   if (verify.testCmd === undefined) return "absent";
-  return verify.testExit === 0 ? "passed" : "failed";
+  switch (verify.testExit) {
+    case 0:
+      return "passed";
+    case 126:
+    case 127:
+      return "missing";
+    default:
+      return "failed";
+  }
 }
 
 export function outcome(view: RunView): Outcome {
@@ -160,9 +178,7 @@ export function outcome(view: RunView): Outcome {
   if (view.agentExit !== undefined && view.agentExit !== 0) return "fail";
   if (view.verify === undefined) return "fail";
   if (view.reviewVerdict === "REJECT") return "fail";
-  const test = classifyTest(view.verify);
-  if (test === "failed") return "fail";
-  return OUTCOME_TABLE[classifyDiff(view.verify)][test];
+  return OUTCOME_TABLE[classifyDiff(view.verify)][classifyTest(view.verify)];
 }
 
 export function outcomeLabel(result: Outcome): string {

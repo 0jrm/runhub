@@ -50,6 +50,19 @@ test("non-zero agent exit includes last 20 stderr lines", () => {
   assert.doesNotMatch(md, /\ne4\n/);
 });
 
+test("a missing test binary is changed, untested, not an exit code", () => {
+  const v = view();
+  assert.ok(v.verify);
+  v.verify.testCmd = "pytest";
+  v.verify.testExit = 127;
+  v.verify.testTail = "sh: 1: pytest: not found\n";
+  const md = renderReport(v, { agentStdout: "", agentStderr: "" });
+  assert.equal(md.split("\n")[0], "changed, untested");
+  assert.match(md, /tests: pytest \(not found on PATH\)/);
+  assert.doesNotMatch(md, /exit 127/);
+  assert.doesNotMatch(md, /sh: 1: pytest: not found/);
+});
+
 test("a failing test tail is cut to 12 lines", () => {
   const v = view();
   assert.ok(v.verify);

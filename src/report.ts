@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   TEST_EXCERPT_LINES,
+  classifyTest,
   lastLines,
   outcome,
   outcomeLabel,
@@ -88,13 +89,32 @@ export function renderReport(
   else lines.push(stat);
 
   lines.push("");
-  if (view.verify?.testCmd !== undefined) {
-    lines.push(`tests: ${view.verify.testCmd}  exit ${view.verify.testExit ?? "?"}`);
-    if (view.verify.testExit !== 0 && view.verify.testTail.trim().length > 0) {
-      lines.push(lastLines(view.verify.testTail, TEST_EXCERPT_LINES));
-    }
-  } else {
+  const verify = view.verify;
+  if (verify === undefined) {
     lines.push("tests: none");
+  } else {
+    const kind = classifyTest(verify);
+    switch (kind) {
+      case "absent":
+        lines.push("tests: none");
+        break;
+      case "missing":
+        lines.push(`tests: ${verify.testCmd} (not found on PATH)`);
+        break;
+      case "passed":
+        lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+        break;
+      case "failed":
+        lines.push(`tests: ${verify.testCmd}  exit ${verify.testExit ?? "?"}`);
+        if (verify.testTail.trim().length > 0) {
+          lines.push(lastLines(verify.testTail, TEST_EXCERPT_LINES));
+        }
+        break;
+      default: {
+        const _exhaustive: never = kind;
+        throw new Error(`unhandled test kind: ${String(_exhaustive)}`);
+      }
+    }
   }
 
   lines.push("");

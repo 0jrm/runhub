@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -51,6 +51,17 @@ print('{"type":"result","result":"edited ${TRACKED_FILE}, added ${UNTRACKED_FILE
 
 export function prependPath(dir: string): string {
   return `${dir}${delimiter}${process.env.PATH ?? ""}`;
+}
+
+export function restrictedPath(names: readonly string[]): string {
+  const dir = tempDir("rpath");
+  for (const name of names) {
+    const r = spawnSync("sh", ["-c", 'command -v "$1"', "sh", name], { encoding: "utf8" });
+    const resolved = r.stdout.trim();
+    if (resolved.length === 0) continue;
+    symlinkSync(resolved, join(dir, name));
+  }
+  return dir;
 }
 
 export function tempDir(tag: string): string {

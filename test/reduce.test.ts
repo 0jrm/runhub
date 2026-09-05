@@ -47,6 +47,26 @@ test("the outcome table covers every diff and test pairing", () => {
   view.verify.testCmd = "npm test";
   view.verify.testExit = 3;
   assert.equal(outcome(view), "fail");
+
+  view.verify.testExit = 127;
+  assert.equal(outcome(view), "no-changes");
+
+  view.verify.diffStat = " src/cli.ts | 2 +-";
+  view.verify.testCmd = "pytest";
+  view.verify.testExit = 127;
+  assert.equal(outcome(view), "changed-untested");
+});
+
+test("exit 126 or 127 is missing, not fail", () => {
+  const view = reduceJsonl(readFileSync(fixture, "utf8"));
+  assert.ok(view.verify);
+  view.verify.testCmd = "pytest";
+  view.verify.testExit = 127;
+  assert.equal(outcome(view), "changed-untested");
+  view.verify.testExit = 126;
+  assert.equal(outcome(view), "changed-untested");
+  view.verify.testExit = 1;
+  assert.equal(outcome(view), "fail");
 });
 
 test("a reduced work_committed sha lands on the view", () => {

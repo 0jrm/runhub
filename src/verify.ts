@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { TEST_TAIL_BYTES, TEST_TIMEOUT_MS, tailBytes, type DiffRange, type VerifyResult } from "./domain.js";
 import { diffStatText } from "./git.js";
@@ -27,7 +28,7 @@ export function detectTestCmd(cwd: string, override?: string): DetectedTest | un
     if (/^test\s*:/m.test(text)) return { cmd: "make test", cwd };
   }
   const pytestDir = findPytest(cwd);
-  if (pytestDir !== undefined) return { cmd: "pytest", cwd: pytestDir };
+  if (pytestDir !== undefined) return { cmd: pytestCmd(cwd, pytestDir), cwd: pytestDir };
   return undefined;
 }
 
@@ -57,6 +58,41 @@ function listedDirs(dir: string): string[] {
   } catch {
     return [];
   }
+}
+
+function isExecutableFile(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function venvPytest(dir: string): string | undefined {
+  const path = join(dir, ".venv", "bin", "pytest");
+  return isExecutableFile(path) ? path : undefined;
+}
+
+function pythonHasPytest(bin: string): boolean {
+  const r = spawnSync(bin, ["-c", "import pytest"], {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  return r.status === 0;
+}
+
+function pytestCmd(searchRoot: string, pytestDir: string): string {
+  const fromSearch = venvPytest(searchRoot);
+  if (fromSearch !== undefined) return fromSearch;
+  if (pytestDir !== searchRoot) {
+    const fromPkg = venvPytest(pytestDir);
+    if (fromPkg !== undefined) return fromPkg;
+  }
+  if (pythonHasPytest("python")) return "python -m pytest";
+  if (pythonHasPytest("python3")) return "python3 -m pytest";
+  return "pytest";
 }
 
 function findPytest(cwd: string): string | undefined {
