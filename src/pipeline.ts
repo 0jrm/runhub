@@ -16,11 +16,12 @@ import {
   type Event,
   type ReviewKind,
   type RunId,
+  type SandboxMode,
   type VerifyResult,
 } from "./domain.js";
-import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
+import { AGENT_USER, agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
 import { runVerify, annotateBaseline } from "./verify.js";
-import { commitMessage, createRunWorktree, diffText, landDirtyWork, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
+import { commitMessage, createRunWorktree, depGroupWarnings, diffText, landDirtyWork, makeGroupWritable, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
 import {
   agentStderrPath,
   agentStdoutPath,
@@ -50,6 +51,7 @@ export type PipelineOpts = {
   agent?: AgentKind;
   model?: string;
   review?: ReviewKind;
+  sandbox?: SandboxMode;
   signal?: AbortSignal;
 };
 
@@ -103,7 +105,12 @@ export function prepareRun(opts: PipelineOpts): RunId {
   const agent = opts.agent ?? "cursor";
   const model = opts.model ?? defaultModel(agent);
   const review = opts.review ?? "none";
+<<<<<<< HEAD
   ensureRunDir(runId);
+=======
+  const sandbox = opts.sandbox ?? "none";
+  mkdirSync(runDir(runId), { recursive: true });
+>>>>>>> 2a50b49 (runhub: Implement SANDBOX.md option a. Read SANDBOX.md, src/adapters)
   writeFileSync(promptPath(runId), opts.prompt, "utf8");
   emit(runId, {
     kind: "run_created",
@@ -114,6 +121,7 @@ export function prepareRun(opts: PipelineOpts): RunId {
     agent,
     model,
     review,
+    sandbox,
     timeoutMs,
     ...(opts.testCmd === undefined ? {} : { testCmd: opts.testCmd }),
     ...(opts.typecheckCmd === undefined ? {} : { typecheckCmd: opts.typecheckCmd }),
@@ -244,6 +252,15 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
     const branch = branchName(runId);
     const wt: RunWorktree = createRunWorktree({ repo: created.cwd, tree, branch });
     emit(runId, { kind: "base_recorded", ts: nowIso(), runId, baseSha: wt.base, branch });
+    const spawnUser = created.sandbox === "user" ? AGENT_USER : undefined;
+    if (spawnUser !== undefined) {
+      makeGroupWritable(tree);
+      const warnings = depGroupWarnings(created.cwd);
+      if (warnings.length > 0) {
+        for (const line of warnings) process.stderr.write(`${line}\n`);
+        emit(runId, { kind: "deps_warned", ts: nowIso(), runId, lines: warnings });
+      }
+    }
 
     if (ac.signal.aborted) return finish();
 
@@ -276,6 +293,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         stderrPath: agentStderrPath(runId),
         timeoutMs,
         signal: ac.signal,
+        ...(spawnUser === undefined ? {} : { user: spawnUser }),
         onStart: (pgid) => {
           emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
         },
@@ -394,6 +412,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         timeoutMs,
         signal: ac.signal,
         appendStdout: true,
+        ...(spawnUser === undefined ? {} : { user: spawnUser }),
         onStart: (pgid) => {
           emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
         },
@@ -457,6 +476,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
           stderrPath: join(runDir(runId), "review.stderr"),
           timeoutMs,
           signal: ac.signal,
+          ...(spawnUser === undefined ? {} : { user: spawnUser }),
         });
         emitUsages(runId, "review", reviewPath(runId), 0);
         const raw = existsSync(reviewPath(runId)) ? readFileSync(reviewPath(runId), "utf8") : "";
