@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { reduceJsonl } from "../src/reduce.js";
-import { extractFinalMessage, mergeCommand, parseReview, renderReport } from "../src/report.js";
+import { extractFinalMessage, mergeCommand, parseReview, renderReport, blockedLine } from "../src/report.js";
 import { extractUsages } from "../src/domain.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test/fixtures/sample.jsonl");
@@ -24,6 +24,17 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
   assert.match(md, /merge: git -C '\/tmp\/app' merge runhub\//);
   assert.doesNotMatch(md, /porcelain/);
   assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
+});
+
+test("BLOCKED matches only at line start and sits under the outcome line", () => {
+  assert.equal(blockedLine("BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("note BLOCKED: mid"), undefined);
+  const v = view();
+  const md = renderReport(v, {
+    agentStdout: '{"type":"result","result":"ok\\nBLOCKED: delete? | options: yes / no"}\n',
+    agentStderr: "",
+  });
+  assert.match(md, /^pass  app  took 0m 07s\nblocked: BLOCKED: delete\? \| options: yes \/ no\n/);
 });
 
 test("merge quotes the cwd so a path with spaces still runs", () => {

@@ -30,11 +30,11 @@ runhub run --cwd <name> --agent <cursor|claude> --review <none|claude> [--model 
 
 Stdout is `runhub: <runId>`. Then wait:
 
-`runhub wait <runId>`
+`runhub wait <runId> --timeout 90s`
 
 If wait exits 3, tell the user it is still going and to ask again later. Do not claim it failed.
 
-If wait exits 0 or 1, read stdout. Paraphrase in a few short sentences, like a friend who already ran downstairs and checked. Lead with pass, fail, no-changes, or changed, untested. `changed, untested` means the agent changed files and there was no test command to run, or the test binary was not on PATH, so nothing proved the change works. Review APPROVE or REJECT is extra color. It does not change pass versus fail.
+If wait exits 0 or 1, read stdout. Paraphrase in a few short sentences, like a friend who already ran downstairs and checked. Lead with pass, fail, no-changes, or changed, untested. `changed, untested` means the agent changed files and there was no test command to run, or the test binary was not on PATH, so nothing proved the change works. A `blocked:` line means the agent stopped on an irreversible choice. Tell the user the question and the options. It does not change the wait exit code. Review APPROVE or REJECT is extra color. It does not change pass versus fail. GitHub is the audit trail, not this chat.
 
 If they say "merge it", run `runhub merge <runId>` with the most recent runId for that project from `runhub list`.
 

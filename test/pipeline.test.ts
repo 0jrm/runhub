@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { runPipeline } from "../src/pipeline.js";
 import {
+  listRuns,
   porcelainPath,
   prune,
   reportPath,
@@ -341,6 +342,8 @@ print("REJECT")
     assert.match(result.markdown, /review: REJECT/);
     assert.match(result.markdown, /agent: cursor-agent \(/);
     assert.equal(result.failed, false);
+    const reviewPrompt = readFileSync(join(runDir(result.runId), "review-prompt.txt"), "utf8");
+    assert.doesNotMatch(reviewPrompt, /You are running unattended/);
     prune(0);
   });
 });
@@ -380,6 +383,9 @@ print('{"type":"result","result":"call %s","usage":{"inputTokens":1100,"outputTo
     assert.match(result.markdown, /retry: 1, tests then passed/);
     assert.match(result.markdown, /usage agent: 1k in \/ 20 out/);
     assert.match(result.markdown, /usage retry: 1k in \/ 20 out/);
+    const retryBody = readFileSync(join(runDir(result.runId), "retry-prompt.txt"), "utf8");
+    assert.match(retryBody, /You are running unattended/);
+    assert.match(retryBody, /Tests failed/);
     prune(0);
   });
 });
@@ -546,6 +552,163 @@ test("a successful push without gh prints pushed: remote/branch", async () => {
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /push_recorded/);
     assert.doesNotMatch(events, /pr_opened/);
+    prune(0);
+  });
+});
+
+test("preamble source is project, then user, then built-in", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+    const spec = "SPEC-BODY-ONLY\n";
+    const cfg = process.env.XDG_CONFIG_HOME ?? "";
+    mkdirSync(join(cfg, "runhub"), { recursive: true });
+
+    const builtin = await runPipeline({ cwd: work, prompt: spec, testCmd: "true", timeoutMs: 15_000 });
+    const builtinPrompt = readFileSync(join(runDir(builtin.runId), "prompt.txt"), "utf8");
+    assert.equal(readFileSync(join(runDir(builtin.runId), "spec.txt"), "utf8"), spec);
+    assert.match(builtinPrompt, /^You are running unattended/);
+    assert.equal(builtinPrompt, `${readFileSync(join(runDir(builtin.runId), "preamble.txt"), "utf8")}\n\n---\n\n${spec}`);
+    prune(0);
+
+    writeFileSync(join(cfg, "runhub", "preamble.md"), "USER-PREAMBLE\n");
+    const user = await runPipeline({ cwd: work, prompt: spec, testCmd: "true", timeoutMs: 15_000 });
+    assert.match(readFileSync(join(runDir(user.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    assert.doesNotMatch(readFileSync(join(runDir(user.runId), "prompt.txt"), "utf8"), /You are running unattended/);
+    prune(0);
+
+    const projectFile = join(work, "project-preamble.md");
+    writeFileSync(projectFile, "PROJECT-PREAMBLE\n");
+    const project = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      preambleFile: "project-preamble.md",
+    });
+    assert.match(readFileSync(join(runDir(project.runId), "prompt.txt"), "utf8"), /^PROJECT-PREAMBLE/);
+    assert.doesNotMatch(readFileSync(join(runDir(project.runId), "prompt.txt"), "utf8"), /USER-PREAMBLE/);
+    prune(0);
+
+    writeFileSync(projectFile, "   \n");
+    const emptyProject = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      preambleFile: "project-preamble.md",
+    });
+    assert.match(readFileSync(join(runDir(emptyProject.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    prune(0);
+  });
+});
+
+test("noPreamble writes the spec alone and commit message stays on the spec", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+    const spec = "edit the readme and add a file";
+    const result = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      noPreamble: true,
+    });
+    assert.equal(readFileSync(join(runDir(result.runId), "prompt.txt"), "utf8"), spec);
+    assert.equal(readFileSync(join(runDir(result.runId), "spec.txt"), "utf8"), spec);
+    const tree = worktreePath(result.runId);
+    const subject = spawnSync("git", ["log", "-1", "--format=%s"], { cwd: tree, encoding: "utf8" }).stdout.trim();
+    assert.equal(subject, `runhub: ${spec}`);
+    prune(0);
+  });
+});
+
+test("commit message and PR title come from the spec, not the preamble", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+exit 0
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    writeFileSync(join(binDir, "preamble.md"), "PREAMBLE-MUST-NOT-BE-TITLE\n");
+    const spec = "SPEC-TITLE-ONLY please";
+    const result = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 20_000,
+      remote: "origin",
+      preambleFile: join(binDir, "preamble.md"),
+    });
+    const subject = spawnSync("git", ["log", "-1", "--format=%s"], {
+      cwd: worktreePath(result.runId),
+      encoding: "utf8",
+    }).stdout.trim();
+    assert.equal(subject, `runhub: ${spec}`);
+    const logged = readFileSync(argvLog, "utf8");
+    assert.match(logged, /--title SPEC-TITLE-ONLY please/);
+    assert.doesNotMatch(logged, /PREAMBLE-MUST-NOT-BE-TITLE/);
+    prune(0);
+  });
+});
+
+test("BLOCKED at line start is reported and listed, mid-line is not", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import json
+open("STAMP.txt", "w").write("x\\n")
+print(json.dumps({"type":"result","result":"did work\\nBLOCKED: delete prod? | options: yes / no"}))
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({ cwd: work, prompt: "edit", testCmd: "true", timeoutMs: 15_000 });
+    assert.match(result.markdown, /^pass  /);
+    assert.match(result.markdown, /^blocked: BLOCKED: delete prod\? \| options: yes \/ no$/m);
+    const listed = listRuns();
+    const row = listed.find((r) => r.runId === result.runId);
+    assert.equal(row?.blocked, true);
+    prune(0);
+
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import json
+open("STAMP2.txt", "w").write("x\\n")
+print(json.dumps({"type":"result","result":"said BLOCKED: not at line start"}))
+`,
+    );
+    const mid = await runPipeline({ cwd: work, prompt: "edit again", testCmd: "true", timeoutMs: 15_000 });
+    assert.doesNotMatch(mid.markdown, /^blocked: /m);
+    const listed2 = listRuns();
+    assert.equal(listed2.find((r) => r.runId === mid.runId)?.blocked, false);
     prune(0);
   });
 });

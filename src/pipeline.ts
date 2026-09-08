@@ -1,5 +1,6 @@
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   AUTO_PRUNE_KEEP,
@@ -28,8 +29,10 @@ import {
   loadView,
   newRunId,
   porcelainPath,
+  preamblePath,
   promptPath,
   prune,
+  specPath,
   reportPath,
   reviewPath,
   runDir,
@@ -50,8 +53,62 @@ export type PipelineOpts = {
   agent?: AgentKind;
   model?: string;
   review?: ReviewKind;
+  preambleFile?: string;
+  noPreamble?: boolean;
   signal?: AbortSignal;
 };
+
+export const BUILTIN_PREAMBLE = `You are running unattended. No human will answer you.
+Do not ask questions. Where the task is ambiguous, choose the most conventional option for this codebase, proceed, and append one line to ASSUMPTIONS.md at the repo root: "ASSUMED: <choice> because <reason>".
+Stop only for a choice that is irreversible or changes product behaviour in a way you cannot infer (data deletion, public API change, auth, payments, secrets). In that case do not edit further and end your final message with exactly one line:
+BLOCKED: <one-sentence question> | options: <a> / <b>
+Stay inside this worktree. Do not touch git remotes, do not push, do not open PRs.
+Run the project's test command before you finish. If tests fail and you cannot fix them, leave them failing and say so.
+Final message, at most 12 lines: what changed, files touched, tests run and result, number of ASSUMED lines.`;
+
+function configDir(): string {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "runhub");
+}
+
+function readNonempty(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  const text = readFileSync(path, "utf8");
+  if (text.trim().length === 0) return undefined;
+  return text;
+}
+
+export function resolvePreamble(opts: {
+  cwd: string;
+  preambleFile?: string;
+  noPreamble?: boolean;
+}): string {
+  if (opts.noPreamble === true) return "";
+  if (opts.preambleFile !== undefined && opts.preambleFile.length > 0) {
+    const path = resolve(opts.cwd, opts.preambleFile);
+    const fromProject = readNonempty(path);
+    if (fromProject !== undefined) return fromProject;
+  }
+  const fromUser = readNonempty(join(configDir(), "preamble.md"));
+  if (fromUser !== undefined) return fromUser;
+  return BUILTIN_PREAMBLE;
+}
+
+export function composeAgentPrompt(preamble: string, spec: string): string {
+  if (preamble.length === 0) return spec;
+  return `${preamble}\n\n---\n\n${spec}`;
+}
+
+function specOf(runId: RunId, fallback: string): string {
+  const path = specPath(runId);
+  if (!existsSync(path)) return fallback;
+  return readFileSync(path, "utf8");
+}
+
+function storedPreamble(runId: RunId): string {
+  const path = preamblePath(runId);
+  if (!existsSync(path)) return "";
+  return readFileSync(path, "utf8");
+}
 
 export type PipelineResult = {
   runId: RunId;
@@ -104,7 +161,15 @@ export function prepareRun(opts: PipelineOpts): RunId {
   const model = opts.model ?? defaultModel(agent);
   const review = opts.review ?? "none";
   ensureRunDir(runId);
-  writeFileSync(promptPath(runId), opts.prompt, "utf8");
+  const spec = opts.prompt;
+  const preamble = resolvePreamble({
+    cwd: opts.cwd,
+    ...(opts.preambleFile === undefined ? {} : { preambleFile: opts.preambleFile }),
+    ...(opts.noPreamble === undefined ? {} : { noPreamble: opts.noPreamble }),
+  });
+  writeFileSync(specPath(runId), spec, "utf8");
+  writeFileSync(preamblePath(runId), preamble, "utf8");
+  writeFileSync(promptPath(runId), composeAgentPrompt(preamble, spec), "utf8");
   emit(runId, {
     kind: "run_created",
     ts: nowIso(),
@@ -207,7 +272,9 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         stderr: agentStderrPath(runId),
       }),
     });
-    if (view.branch !== undefined) maybeOpenPr(runId, view.cwd, view.branch, view.prompt, view.remote);
+    if (view.branch !== undefined) {
+      maybeOpenPr(runId, view.cwd, view.branch, specOf(runId, view.prompt), view.remote);
+    }
     view = loadView(runId);
     const result = ac.signal.aborted && view.status !== "failed" ? "fail" : outcome(view);
     const status = result === "fail" || ac.signal.aborted ? "failed" : "done";
@@ -327,7 +394,8 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       return result;
     };
 
-    let landed = land(created.prompt);
+    const spec = specOf(runId, created.prompt);
+    let landed = land(spec);
     let range = { from: wt.base, to: landed.sha };
 
     const runChecks = async (): Promise<VerifyResult> => {
@@ -376,12 +444,15 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       const retryPrompt = join(runDir(runId), "retry-prompt.txt");
       writeFileSync(
         retryPrompt,
-        [
-          "Tests failed. Fix them. Do not change test expectations unless the test itself is wrong.",
-          "",
-          lastLines(verify.testTail, RETRY_TEST_LINES),
-          "",
-        ].join("\n"),
+        composeAgentPrompt(
+          storedPreamble(runId),
+          [
+            "Tests failed. Fix them. Do not change test expectations unless the test itself is wrong.",
+            "",
+            lastLines(verify.testTail, RETRY_TEST_LINES),
+            "",
+          ].join("\n"),
+        ),
         "utf8",
       );
       emit(runId, { kind: "step_started", ts: nowIso(), runId, step: { id: "agent", argv } });
@@ -410,7 +481,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         ...(timedOut ? { timedOut: true } : {}),
       });
       if (!ac.signal.aborted) {
-        landed = land(created.prompt);
+        landed = land(spec);
         range = { from: wt.base, to: landed.sha };
         verify = await runChecks();
       }

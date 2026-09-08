@@ -19,6 +19,7 @@ export type Project = {
   typecheck?: string;
   lint?: string;
   remote?: string;
+  preamble?: string;
 };
 
 export function projectsTomlPath(): string {
@@ -40,6 +41,7 @@ export function parseProjects(text: string): Project[] {
     typecheck?: string;
     lint?: string;
     remote?: string;
+    preamble?: string;
   } | undefined;
 
   const flush = (): void => {
@@ -58,6 +60,7 @@ export function parseProjects(text: string): Project[] {
     }
     if (current.lint !== undefined && current.lint.length > 0) project.lint = current.lint;
     if (current.remote !== undefined && current.remote.length > 0) project.remote = current.remote;
+    if (current.preamble !== undefined && current.preamble.length > 0) project.preamble = current.preamble;
     projects.push(project);
     current = undefined;
   };
@@ -91,6 +94,7 @@ export function parseProjects(text: string): Project[] {
     else if (key === "typecheck") current.typecheck = value;
     else if (key === "lint") current.lint = value;
     else if (key === "remote") current.remote = value;
+    else if (key === "preamble") current.preamble = value;
   }
   flush();
   return projects;
@@ -102,6 +106,7 @@ export type ResolvedCwd = {
   typecheck?: string;
   lint?: string;
   remote?: string;
+  preamble?: string;
 };
 
 function withProjectCmds(cwd: string, project: Project): ResolvedCwd {
@@ -110,6 +115,7 @@ function withProjectCmds(cwd: string, project: Project): ResolvedCwd {
   if (project.typecheck !== undefined) out.typecheck = project.typecheck;
   if (project.lint !== undefined) out.lint = project.lint;
   if (project.remote !== undefined) out.remote = project.remote;
+  if (project.preamble !== undefined) out.preamble = project.preamble;
   return out;
 }
 

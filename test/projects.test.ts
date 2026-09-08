@@ -43,6 +43,14 @@ remote = origin
   ]);
 });
 
+test("parseProjects reads a preamble path", () => {
+  const projects = parseProjects(`[hycom]
+path = /tmp/hycom
+preamble = /tmp/hycom/PREAMBLE.md
+`);
+  assert.deepEqual(projects, [{ name: "hycom", path: "/tmp/hycom", preamble: "/tmp/hycom/PREAMBLE.md" }]);
+});
+
 test("parseProjects throws on a table with no path or on garbage", () => {
   assert.throws(() => parseProjects("[hycom]\ntest = true\n"), ParseError);
   assert.throws(() => parseProjects("not a toml line\n"), ParseError);

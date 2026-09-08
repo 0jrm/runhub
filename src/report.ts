@@ -14,6 +14,13 @@ import {
   type VerifyResult,
 } from "./domain.js";
 
+export function blockedLine(finalMessage: string): string | undefined {
+  for (const line of finalMessage.split(/\r?\n/)) {
+    if (line.startsWith("BLOCKED:")) return line;
+  }
+  return undefined;
+}
+
 export function extractFinalMessage(raw: string): string {
   const slice = raw.length > 256_000 ? raw.slice(raw.length - 256_000) : raw;
   let found: string | undefined;
@@ -188,6 +195,8 @@ export function renderReport(
   const took = tookLine(view);
   if (took !== undefined) head.push(took);
   const lines: string[] = [head.join("  ")];
+  const blocked = blockedLine(extractFinalMessage(extras.agentStdout));
+  if (blocked !== undefined) lines.push(`blocked: ${blocked}`);
   lines.push("");
 
   if (view.branch) {

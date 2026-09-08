@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { listOutcome, parseEventJson, toRunId, type Event, type RunId, type RunView } from "./domain.js";
+import { blockedLine, extractFinalMessage } from "./report.js";
 import { reduce } from "./reduce.js";
 import { removeRunWorktree } from "./git.js";
 
@@ -51,6 +52,14 @@ export function agentStderrPath(runId: RunId): string {
 
 export function promptPath(runId: RunId): string {
   return join(runDir(runId), "prompt.txt");
+}
+
+export function specPath(runId: RunId): string {
+  return join(runDir(runId), "spec.txt");
+}
+
+export function preamblePath(runId: RunId): string {
+  return join(runDir(runId), "preamble.txt");
 }
 
 export function reportPath(runId: RunId): string {
@@ -101,6 +110,7 @@ export type ListedRun = {
   createdAt: string;
   project: string;
   outcome: ReturnType<typeof listOutcome>;
+  blocked: boolean;
 };
 
 export function listRuns(now = Date.now()): ListedRun[] {
@@ -113,11 +123,16 @@ export function listRuns(now = Date.now()): ListedRun[] {
       if (!statSync(dir).isDirectory()) continue;
       const id = toRunId(name);
       const view = loadView(id);
+      const stdoutFile = agentStdoutPath(id);
+      const blocked =
+        existsSync(stdoutFile) &&
+        blockedLine(extractFinalMessage(readFileSync(stdoutFile, "utf8"))) !== undefined;
       out.push({
         runId: id,
         createdAt: view.createdAt,
         project: basename(view.cwd),
         outcome: listOutcome(view, now, pidAlive(view.pipelinePid)),
+        blocked,
       });
     } catch {
       continue;
