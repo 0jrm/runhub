@@ -96,7 +96,13 @@ export function readEvents(runId: RunId): Event[] {
 }
 
 export function loadView(runId: RunId): RunView {
-  return reduce(readEvents(runId));
+  const view = reduce(readEvents(runId));
+  const statusFile = join(runDir(runId), "review-comment.status");
+  if (existsSync(statusFile)) {
+    const s = readFileSync(statusFile, "utf8").trim();
+    if (s === "posted" || s === "failed") view.reviewComment = s;
+  }
+  return view;
 }
 
 export function writeArtifacts(runId: RunId, files: { summary: unknown; markdown: string }): void {

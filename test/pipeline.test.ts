@@ -712,3 +712,132 @@ print(json.dumps({"type":"result","result":"said BLOCKED: not at line start"}))
     prune(0);
   });
 });
+
+test("gh pr comment posts only when a PR URL exists", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then exit 0; fi
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("- small")
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const withPr = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    const logged = readFileSync(argvLog, "utf8");
+    assert.match(logged, /pr comment https:\/\/github.com\/0jrm\/toy\/pull\/9 --body-file /);
+    assert.match(withPr.markdown, /^review-comment: posted$/m);
+    const body = readFileSync(join(runDir(withPr.runId), "review-comment.md"), "utf8");
+    assert.equal(body.split("\n")[0], `runhub review — APPROVE — run ${withPr.runId}`);
+    assert.equal(withPr.failed, false);
+    prune(0);
+  });
+});
+
+test("review with no PR does not post a comment or add a report line", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+    });
+    assert.equal(existsSync(argvLog), false);
+    assert.doesNotMatch(result.markdown, /review-comment:/);
+    assert.equal(existsSync(join(runDir(result.runId), "review-comment.md")), false);
+    prune(0);
+  });
+});
+
+test("a failed gh pr comment does not change outcome", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then echo "boom-comment" >&2; exit 1; fi
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    assert.match(result.markdown, /^pass  /);
+    assert.match(result.markdown, /^review-comment: failed$/m);
+    assert.equal(result.failed, false);
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.match(events, /gh pr comment failed: boom-comment/);
+    prune(0);
+  });
+});

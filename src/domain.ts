@@ -109,6 +109,7 @@ export type RunView = {
   usages: Usage[];
   reviewVerdict?: Verdict;
   reviewBody?: string;
+  reviewComment?: "posted" | "failed";
   prUrl?: string;
   pushedRemote?: string;
   errors: RunError[];

@@ -239,6 +239,9 @@ export function renderReport(
     for (const line of parseReview(view.reviewBody ?? "").extra) lines.push(line);
   }
 
+  if (view.reviewComment === "posted") lines.push("review-comment: posted");
+  else if (view.reviewComment === "failed") lines.push("review-comment: failed");
+
   if (view.errors.length > 0) {
     lines.push("");
     lines.push("errors:");

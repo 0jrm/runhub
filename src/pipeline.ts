@@ -17,6 +17,7 @@ import {
   type Event,
   type ReviewKind,
   type RunId,
+  type Verdict,
   type VerifyResult,
 } from "./domain.js";
 import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
@@ -193,6 +194,11 @@ function gh(args: string[], cwd: string): { status: number; stdout: string; stde
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
+function ghUsable(cwd: string): boolean {
+  if (findOnPath(["gh"]) === undefined) return false;
+  return gh(["auth", "status"], cwd).status === 0;
+}
+
 function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string, remote: string | undefined): void {
   if (remote === undefined || remote.length === 0) return;
   if (remoteUrl(cwd, remote) === undefined) {
@@ -215,9 +221,7 @@ function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string, 
     return;
   }
   emit(runId, { kind: "push_recorded", ts: nowIso(), runId, remote, branch });
-  if (findOnPath(["gh"]) === undefined) return;
-  const auth = gh(["auth", "status"], cwd);
-  if (auth.status !== 0) return;
+  if (!ghUsable(cwd)) return;
   const title = commitMessage(prompt).slice("runhub: ".length) || prompt.slice(0, 60);
   const created = gh(
     ["pr", "create", "--head", branch, "--title", title, "--body-file", reportPath(runId)],
@@ -238,6 +242,45 @@ function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string, 
     return;
   }
   emit(runId, { kind: "pr_opened", ts: nowIso(), runId, url });
+}
+
+function reviewVerdictLabel(verdict: Verdict | undefined): string {
+  if (verdict === "APPROVE" || verdict === "REJECT") return verdict;
+  return "no verdict";
+}
+
+function maybePostReviewComment(runId: RunId): void {
+  const view = loadView(runId);
+  if (view.prUrl === undefined) return;
+  if (view.reviewBody === undefined) return;
+  if (!ghUsable(view.cwd)) return;
+  const bodyPath = join(runDir(runId), "review-comment.md");
+  const headlines = view.verify === undefined ? [] : verifyHeadlineLines(view.verify);
+  writeFileSync(
+    bodyPath,
+    [
+      `runhub review — ${reviewVerdictLabel(view.reviewVerdict)} — run ${runId}`,
+      "",
+      ...headlines,
+      "",
+      view.reviewBody,
+    ].join("\n"),
+    "utf8",
+  );
+  const posted = gh(["pr", "comment", view.prUrl, "--body-file", bodyPath], view.cwd);
+  const statusPath = join(runDir(runId), "review-comment.status");
+  if (posted.status !== 0) {
+    const tail = lastLines(posted.stderr.trim() || posted.stdout.trim() || String(posted.status), 20);
+    emit(runId, {
+      kind: "error",
+      ts: nowIso(),
+      runId,
+      message: `gh pr comment failed: ${tail}`,
+    });
+    writeFileSync(statusPath, "failed\n", "utf8");
+    return;
+  }
+  writeFileSync(statusPath, "posted\n", "utf8");
 }
 
 export async function executePipeline(runId: RunId, signal?: AbortSignal): Promise<PipelineResult> {
@@ -275,6 +318,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
     if (view.branch !== undefined) {
       maybeOpenPr(runId, view.cwd, view.branch, specOf(runId, view.prompt), view.remote);
     }
+    maybePostReviewComment(runId);
     view = loadView(runId);
     const result = ac.signal.aborted && view.status !== "failed" ? "fail" : outcome(view);
     const status = result === "fail" || ac.signal.aborted ? "failed" : "done";

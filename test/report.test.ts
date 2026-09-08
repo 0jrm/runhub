@@ -143,6 +143,18 @@ test("REJECT review keeps pass on line one", () => {
   assert.match(md, /review: REJECT/);
 });
 
+test("review-comment line is posted or failed", () => {
+  const v = view();
+  v.reviewVerdict = "APPROVE";
+  v.reviewBody = "APPROVE\n";
+  v.reviewComment = "posted";
+  assert.match(renderReport(v, { agentStdout: "", agentStderr: "" }), /^review-comment: posted$/m);
+  v.reviewComment = "failed";
+  assert.match(renderReport(v, { agentStdout: "", agentStderr: "" }), /^review-comment: failed$/m);
+  delete v.reviewComment;
+  assert.doesNotMatch(renderReport(v, { agentStdout: "", agentStderr: "" }), /review-comment:/);
+});
+
 test("extractUsages reads cursor-agent result.usage camelCase and keeps counts under 1000 exact", () => {
   const line =
     '{"type":"result","subtype":"success","usage":{"inputTokens":18168,"outputTokens":179,"cacheReadTokens":22016,"cacheWriteTokens":0}}';
