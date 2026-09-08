@@ -26,10 +26,12 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
   assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
 });
 
-test("BLOCKED matches only at line start and sits under the outcome line", () => {
+test("BLOCKED matches only the last line at column 0", () => {
   assert.equal(blockedLine("BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
   assert.equal(blockedLine("note BLOCKED: mid"), undefined);
+  assert.equal(blockedLine("BLOCKED: first\nstill going"), undefined);
   const v = view();
+  v.blockedLine = "BLOCKED: delete? | options: yes / no";
   const md = renderReport(v, {
     agentStdout: '{"type":"result","result":"ok\\nBLOCKED: delete? | options: yes / no"}\n',
     agentStderr: "",

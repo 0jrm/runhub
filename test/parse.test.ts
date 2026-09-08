@@ -29,6 +29,23 @@ test("parseEvent accepts run_created defaults and verify_recorded", () => {
   assert.equal(v.kind, "verify_recorded");
 });
 
+test("parseEvent accepts review_comment_recorded and blocked_recorded", () => {
+  const comment = parseEvent({
+    kind: "review_comment_recorded",
+    ts: "2026-09-04T12:00:00.000Z",
+    runId: "11111111-1111-1111-1111-111111111111",
+    status: "posted",
+  });
+  assert.equal(comment.kind, "review_comment_recorded");
+  const blocked = parseEvent({
+    kind: "blocked_recorded",
+    ts: "2026-09-04T12:00:00.000Z",
+    runId: "11111111-1111-1111-1111-111111111111",
+    line: "BLOCKED: pick a | options: a / b",
+  });
+  assert.equal(blocked.kind, "blocked_recorded");
+});
+
 test("parseEvent accepts pgid_recorded and push_recorded", () => {
   const pgid = parseEvent({
     kind: "pgid_recorded",

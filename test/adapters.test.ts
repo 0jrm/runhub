@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CURSOR_MODEL } from "../src/domain.js";
-import { agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
+import { REVIEW_ALLOWED_TOOLS, agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
 import { tempDir, writeBin } from "./helpers.js";
 
 test("cursor argv pins Grok 4.6 medium, --force, and omits the prompt", () => {
@@ -38,12 +38,15 @@ test("review argv is read-only files and git, not write or unrestricted bash", (
     "--permission-mode",
     "dontAsk",
     "--allowedTools",
-    "Read,Glob,Grep,Bash(git *)",
+    REVIEW_ALLOWED_TOOLS,
   ]);
   assert.equal(argv.includes("--dangerously-skip-permissions"), false);
   assert.equal(argv.includes("--tools"), false);
   assert.doesNotMatch(argv.join(" "), /\bWrite\b/);
   assert.doesNotMatch(argv.join(" "), /\bEdit\b/);
+  assert.doesNotMatch(REVIEW_ALLOWED_TOOLS, /git \*/);
+  assert.match(REVIEW_ALLOWED_TOOLS, /Bash\(git log:\*\)/);
+  assert.match(REVIEW_ALLOWED_TOOLS, /Bash\(git rev-parse:\*\)/);
 });
 
 test("prompt arrives on stdin not argv", async () => {

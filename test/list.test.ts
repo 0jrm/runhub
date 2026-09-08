@@ -111,6 +111,12 @@ test("listRuns shows project basename, outcome, and stale", () => {
           timeoutMs: 1000,
         },
         {
+          kind: "blocked_recorded",
+          ts: "2026-01-04T00:00:00.500Z",
+          runId: blockedId,
+          line: "BLOCKED: pick a / b | options: a / b",
+        },
+        {
           kind: "run_finished",
           ts: "2026-01-04T00:00:01.000Z",
           runId: blockedId,
@@ -120,11 +126,6 @@ test("listRuns shows project basename, outcome, and stale", () => {
       ]
         .map((e) => JSON.stringify(e))
         .join("\n") + "\n",
-      "utf8",
-    );
-    writeFileSync(
-      join(runDir(blockedId), "agent.stdout"),
-      '{"type":"result","result":"done\\nBLOCKED: pick a / b | options: a / b"}\n',
       "utf8",
     );
     const listed2 = listRuns(Date.parse("2026-01-01T00:00:05.000Z"));

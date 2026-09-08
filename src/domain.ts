@@ -59,6 +59,8 @@ export type Event =
       outputTokens: number;
     }
   | { kind: "review_recorded"; ts: string; runId: string; verdict: Verdict; body: string }
+  | { kind: "review_comment_recorded"; ts: string; runId: string; status: "posted" | "failed" }
+  | { kind: "blocked_recorded"; ts: string; runId: string; line: string }
   | { kind: "pr_opened"; ts: string; runId: string; url: string }
   | { kind: "error"; ts: string; runId: string; stepId?: StepId; message: string }
   | { kind: "run_finished"; ts: string; runId: string; status: "done" | "failed"; summary: string };
@@ -110,6 +112,7 @@ export type RunView = {
   reviewVerdict?: Verdict;
   reviewBody?: string;
   reviewComment?: "posted" | "failed";
+  blockedLine?: string;
   prUrl?: string;
   pushedRemote?: string;
   errors: RunError[];
@@ -362,6 +365,11 @@ function asVerdict(x: unknown): Verdict {
   throw new ParseError("invalid verdict");
 }
 
+function asCommentStatus(x: unknown): "posted" | "failed" {
+  if (x === "posted" || x === "failed") return x;
+  throw new ParseError("invalid review comment status");
+}
+
 function asStringArray(x: unknown, field: string): string[] {
   if (!Array.isArray(x) || !x.every((i) => typeof i === "string")) {
     throw new ParseError(`${field} must be a string array`);
@@ -483,6 +491,20 @@ export function parseEvent(raw: unknown): Event {
         runId: asNonEmpty(raw.runId, "runId"),
         verdict: asVerdict(raw.verdict),
         body: asString(raw.body, "body"),
+      };
+    case "review_comment_recorded":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        status: asCommentStatus(raw.status),
+      };
+    case "blocked_recorded":
+      return {
+        kind,
+        ts: asTs(raw.ts, "ts"),
+        runId: asNonEmpty(raw.runId, "runId"),
+        line: asNonEmpty(raw.line, "line"),
       };
     case "pgid_recorded":
       return {

@@ -13,7 +13,6 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { listOutcome, parseEventJson, toRunId, type Event, type RunId, type RunView } from "./domain.js";
-import { blockedLine, extractFinalMessage } from "./report.js";
 import { reduce } from "./reduce.js";
 import { removeRunWorktree } from "./git.js";
 
@@ -96,13 +95,7 @@ export function readEvents(runId: RunId): Event[] {
 }
 
 export function loadView(runId: RunId): RunView {
-  const view = reduce(readEvents(runId));
-  const statusFile = join(runDir(runId), "review-comment.status");
-  if (existsSync(statusFile)) {
-    const s = readFileSync(statusFile, "utf8").trim();
-    if (s === "posted" || s === "failed") view.reviewComment = s;
-  }
-  return view;
+  return reduce(readEvents(runId));
 }
 
 export function writeArtifacts(runId: RunId, files: { summary: unknown; markdown: string }): void {
@@ -129,16 +122,12 @@ export function listRuns(now = Date.now()): ListedRun[] {
       if (!statSync(dir).isDirectory()) continue;
       const id = toRunId(name);
       const view = loadView(id);
-      const stdoutFile = agentStdoutPath(id);
-      const blocked =
-        existsSync(stdoutFile) &&
-        blockedLine(extractFinalMessage(readFileSync(stdoutFile, "utf8"))) !== undefined;
       out.push({
         runId: id,
         createdAt: view.createdAt,
         project: basename(view.cwd),
         outcome: listOutcome(view, now, pidAlive(view.pipelinePid)),
-        blocked,
+        blocked: view.blockedLine !== undefined,
       });
     } catch {
       continue;

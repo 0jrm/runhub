@@ -610,7 +610,24 @@ test("preamble source is project, then user, then built-in", async () => {
       preambleFile: "project-preamble.md",
     });
     assert.match(readFileSync(join(runDir(emptyProject.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    assert.match(
+      readFileSync(join(runsRoot(), emptyProject.runId, "events.jsonl"), "utf8"),
+      /project preamble missing or empty/,
+    );
     prune(0);
+
+    const missing = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      preambleFile: "no-such-preamble.md",
+    });
+    assert.match(readFileSync(join(runDir(missing.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    assert.match(
+      readFileSync(join(runsRoot(), missing.runId, "events.jsonl"), "utf8"),
+      /project preamble missing or empty/,
+    );
   });
 });
 
@@ -762,6 +779,8 @@ print("APPROVE")
     const logged = readFileSync(argvLog, "utf8");
     assert.match(logged, /pr comment https:\/\/github.com\/0jrm\/toy\/pull\/9 --body-file /);
     assert.match(withPr.markdown, /^review-comment: posted$/m);
+    const events = readFileSync(join(runsRoot(), withPr.runId, "events.jsonl"), "utf8");
+    assert.match(events, /"kind":"review_comment_recorded".*"status":"posted"/);
     const body = readFileSync(join(runDir(withPr.runId), "review-comment.md"), "utf8");
     assert.equal(body.split("\n")[0], `runhub review — APPROVE — run ${withPr.runId}`);
     assert.equal(withPr.failed, false);
@@ -846,6 +865,7 @@ print("APPROVE")
     assert.equal(result.failed, false);
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /gh pr comment failed: boom-comment/);
+    assert.match(events, /"kind":"review_comment_recorded".*"status":"failed"/);
     prune(0);
   });
 });

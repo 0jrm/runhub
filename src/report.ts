@@ -15,9 +15,10 @@ import {
 } from "./domain.js";
 
 export function blockedLine(finalMessage: string): string | undefined {
-  for (const line of finalMessage.split(/\r?\n/)) {
-    if (line.startsWith("BLOCKED:")) return line;
-  }
+  const lines = finalMessage.split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const last = lines[lines.length - 1];
+  if (last !== undefined && last.startsWith("BLOCKED:")) return last;
   return undefined;
 }
 
@@ -195,8 +196,7 @@ export function renderReport(
   const took = tookLine(view);
   if (took !== undefined) head.push(took);
   const lines: string[] = [head.join("  ")];
-  const blocked = blockedLine(extractFinalMessage(extras.agentStdout));
-  if (blocked !== undefined) lines.push(`blocked: ${blocked}`);
+  if (view.blockedLine !== undefined) lines.push(`blocked: ${view.blockedLine}`);
   lines.push("");
 
   if (view.branch) {

@@ -32,7 +32,7 @@ runhub wait <runId>
 
 That starts Cursor Agent with Grok 4.6 Medium in a new worktree on `runhub/<runId>`. The prompt goes on stdin, not argv. `--force` (Cursor) and `--dangerously-skip-permissions` (Claude) are on by default.
 
-Before the spec, runhub prepends an unattended preamble. The built-in text tells the agent not to ask questions, to write `ASSUMPTIONS.md` for conventional choices, and to end with `BLOCKED: ...` only for irreversible product choices. Override it with `~/.config/runhub/preamble.md` if that file is non-empty. A project's `preamble` key wins over both. `--no-preamble` writes the spec alone, for debugging. Combined text is `prompt.txt` as `<preamble>`, a blank line, `---`, a blank line, then the spec. The raw spec stays in `spec.txt`. Commit messages, PR titles, and `report.md` use the spec.
+Before the spec, runhub prepends an unattended preamble. The built-in text tells the agent not to ask questions, to write `ASSUMPTIONS.md` for conventional choices, and to end with `BLOCKED: ...` only for irreversible product choices. Override it with `~/.config/runhub/preamble.md` if that file is non-empty. A project's `preamble` key wins over both. If that file is missing or empty, runhub emits an `error` event and falls through to the user file, then the built-in. `--no-preamble` writes the spec alone, for debugging. Combined text is `prompt.txt` as `<preamble>`, a blank line, `---`, a blank line, then the spec. The raw spec stays in `spec.txt`. Commit messages, PR titles, and `report.md` use the spec from `run_created`.
 
 A long spec does not have to fit on one command line. `--prompt-file <path>` reads it from a file and `--prompt -` reads it from stdin. Pass exactly one of `--prompt` or `--prompt-file`.
 
@@ -57,13 +57,13 @@ runhub run --cwd /home/jrm22n/hycom --review claude --prompt "fix the login bug"
 runhub merge <runId>
 ```
 
-`--agent` is `cursor` or `claude` (default cursor). `--model` overrides the per-agent default. `--review claude` runs after verify, reads the committed diff plus the test tail, and must end with APPROVE or REJECT. The reviewer may Read, Glob, Grep, and `Bash(git *)` in the worktree. It does not get Write, Edit, or unrestricted Bash. The review prompt says not to modify anything and not to review style. If `ASSUMPTIONS.md` exists in the worktree, its contents go into the prompt.
+`--agent` is `cursor` or `claude` (default cursor). `--model` overrides the per-agent default. `--review claude` runs after verify, reads the committed diff plus the test tail, and must end with APPROVE or REJECT. The reviewer may Read, Glob, Grep, and these git subcommands: log, show, diff, status, blame, rev-parse, ls-files. It does not get Write, Edit, unrestricted Bash, or mutating git. The review prompt says not to modify anything and not to review style. If `ASSUMPTIONS.md` exists in the worktree, its contents go into the prompt.
 
 `merge` squash-merges the PR when one was opened. Otherwise it runs `git -C <cwd> merge runhub/<runId>`.
 
 The outcome line does not lie about what was checked. `pass` means the diff is non-empty and a test command exited 0. A repo with no test command, or a test command that is not on PATH, gets `changed, untested`, never `pass`. `no-changes` means an empty diff. Tests that already fail at the base sha do not make the run `fail`: empty diff stays `no-changes`, a non-empty diff is `changed, untested`. `fail` means the agent exited non-zero, timed out, or a test, typecheck, or lint command ran and exited non-zero after a passing base. Review stays on its own line.
 
-The report starts with outcome, project name, and duration. If the agent's last message has a line that starts with `BLOCKED:`, the next report line is `blocked: <that line>`. Outcome stays whatever verify said. `wait` still exits 0 or 1 by outcome. Branch, then `pr:` and `merge:` when a PR opened, or `pushed:` when the branch was pushed and no PR opened. Diff-stat. Tests, retry, typecheck, lint. The agent binary and last message. On a failed agent, the last 20 lines of `agent.stderr`. Review binary and verdict if you asked for one. `review-comment: posted` or `review-comment: failed` when a PR comment was attempted. `runhub report <runId>` prints that stored file unchanged.
+The report starts with outcome, project name, and duration. If the agent's last message ends with a line that starts with `BLOCKED:`, the next report line is `blocked: <that line>`. Outcome stays whatever verify said. `wait` still exits 0 or 1 by outcome. Branch, then `pr:` and `merge:` when a PR opened, or `pushed:` when the branch was pushed and no PR opened. Diff-stat. Tests, retry, typecheck, lint. The agent binary and last message. On a failed agent, the last 20 lines of `agent.stderr`. Review binary and verdict if you asked for one. `review-comment: posted` or `review-comment: failed` when a PR comment was attempted. `runhub report <runId>` prints that stored file unchanged.
 
 ```bash
 runhub status
@@ -72,7 +72,7 @@ runhub list
 runhub prune --keep 20
 ```
 
-`list` shows run id, project basename, outcome, and time. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A `BLOCKED:` last-message line adds the tag `blocked` after the outcome. A run is `running` only while its pipeline PID is alive. Otherwise an unfinished run is `stale`. `list` ends with a tally of the last 30 runs.
+`list` shows run id, project basename, outcome, a blocked column, and time. The blocked column is `blocked` or `-`. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A run is `running` only while its pipeline PID is alive. Otherwise an unfinished run is `stale`. `list` ends with a tally of the last 30 runs.
 
 Logs live in `~/.local/share/runhub/runs/`. Each run directory is mode 0700. `prompt.txt`, `spec.txt`, `review-prompt.txt`, and `report.md` are plaintext. Anyone who can read that tree can read the prompts. Finished runs prune older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
 

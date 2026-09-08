@@ -41,7 +41,7 @@ import {
   worktreePath,
   writeArtifacts,
 } from "./store.js";
-import { parseReview, renderReportFromFiles, summaryJson, verifyHeadlineLines } from "./report.js";
+import { blockedLine, extractFinalMessage, parseReview, renderReportFromFiles, summaryJson, verifyHeadlineLines } from "./report.js";
 
 export type PipelineOpts = {
   cwd: string;
@@ -82,27 +82,26 @@ export function resolvePreamble(opts: {
   cwd: string;
   preambleFile?: string;
   noPreamble?: boolean;
-}): string {
-  if (opts.noPreamble === true) return "";
+}): { text: string; projectPreambleError?: string } {
+  if (opts.noPreamble === true) return { text: "" };
   if (opts.preambleFile !== undefined && opts.preambleFile.length > 0) {
     const path = resolve(opts.cwd, opts.preambleFile);
     const fromProject = readNonempty(path);
-    if (fromProject !== undefined) return fromProject;
+    if (fromProject !== undefined) return { text: fromProject };
+    const fromUser = readNonempty(join(configDir(), "preamble.md"));
+    return {
+      text: fromUser ?? BUILTIN_PREAMBLE,
+      projectPreambleError: `project preamble missing or empty: ${path}`,
+    };
   }
   const fromUser = readNonempty(join(configDir(), "preamble.md"));
-  if (fromUser !== undefined) return fromUser;
-  return BUILTIN_PREAMBLE;
+  if (fromUser !== undefined) return { text: fromUser };
+  return { text: BUILTIN_PREAMBLE };
 }
 
 export function composeAgentPrompt(preamble: string, spec: string): string {
   if (preamble.length === 0) return spec;
   return `${preamble}\n\n---\n\n${spec}`;
-}
-
-function specOf(runId: RunId, fallback: string): string {
-  const path = specPath(runId);
-  if (!existsSync(path)) return fallback;
-  return readFileSync(path, "utf8");
 }
 
 function storedPreamble(runId: RunId): string {
@@ -119,6 +118,14 @@ export type PipelineResult = {
 
 function emit(runId: RunId, event: Event): void {
   appendEvent(runId, event);
+}
+
+function recordBlocked(runId: RunId): void {
+  const stdoutPath = agentStdoutPath(runId);
+  if (!existsSync(stdoutPath)) return;
+  const line = blockedLine(extractFinalMessage(readFileSync(stdoutPath, "utf8")));
+  if (line === undefined) return;
+  emit(runId, { kind: "blocked_recorded", ts: nowIso(), runId, line });
 }
 
 function emitVerify(runId: RunId, verify: VerifyResult): void {
@@ -163,14 +170,14 @@ export function prepareRun(opts: PipelineOpts): RunId {
   const review = opts.review ?? "none";
   ensureRunDir(runId);
   const spec = opts.prompt;
-  const preamble = resolvePreamble({
+  const resolved = resolvePreamble({
     cwd: opts.cwd,
     ...(opts.preambleFile === undefined ? {} : { preambleFile: opts.preambleFile }),
     ...(opts.noPreamble === undefined ? {} : { noPreamble: opts.noPreamble }),
   });
   writeFileSync(specPath(runId), spec, "utf8");
-  writeFileSync(preamblePath(runId), preamble, "utf8");
-  writeFileSync(promptPath(runId), composeAgentPrompt(preamble, spec), "utf8");
+  writeFileSync(preamblePath(runId), resolved.text, "utf8");
+  writeFileSync(promptPath(runId), composeAgentPrompt(resolved.text, spec), "utf8");
   emit(runId, {
     kind: "run_created",
     ts: nowIso(),
@@ -186,6 +193,14 @@ export function prepareRun(opts: PipelineOpts): RunId {
     ...(opts.lintCmd === undefined ? {} : { lintCmd: opts.lintCmd }),
     ...(opts.remote === undefined ? {} : { remote: opts.remote }),
   });
+  if (resolved.projectPreambleError !== undefined) {
+    emit(runId, {
+      kind: "error",
+      ts: nowIso(),
+      runId,
+      message: resolved.projectPreambleError,
+    });
+  }
   return runId;
 }
 
@@ -268,7 +283,6 @@ function maybePostReviewComment(runId: RunId): void {
     "utf8",
   );
   const posted = gh(["pr", "comment", view.prUrl, "--body-file", bodyPath], view.cwd);
-  const statusPath = join(runDir(runId), "review-comment.status");
   if (posted.status !== 0) {
     const tail = lastLines(posted.stderr.trim() || posted.stdout.trim() || String(posted.status), 20);
     emit(runId, {
@@ -277,10 +291,20 @@ function maybePostReviewComment(runId: RunId): void {
       runId,
       message: `gh pr comment failed: ${tail}`,
     });
-    writeFileSync(statusPath, "failed\n", "utf8");
+    emit(runId, {
+      kind: "review_comment_recorded",
+      ts: nowIso(),
+      runId,
+      status: "failed",
+    });
     return;
   }
-  writeFileSync(statusPath, "posted\n", "utf8");
+  emit(runId, {
+    kind: "review_comment_recorded",
+    ts: nowIso(),
+    runId,
+    status: "posted",
+  });
 }
 
 export async function executePipeline(runId: RunId, signal?: AbortSignal): Promise<PipelineResult> {
@@ -307,6 +331,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       return { runId, markdown, failed: view.status === "failed" };
     }
     finalized = true;
+    recordBlocked(runId);
     let view = loadView(runId);
     writeArtifacts(runId, {
       summary: summaryJson(view),
@@ -316,7 +341,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       }),
     });
     if (view.branch !== undefined) {
-      maybeOpenPr(runId, view.cwd, view.branch, specOf(runId, view.prompt), view.remote);
+      maybeOpenPr(runId, view.cwd, view.branch, view.prompt, view.remote);
     }
     maybePostReviewComment(runId);
     view = loadView(runId);
@@ -438,8 +463,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       return result;
     };
 
-    const spec = specOf(runId, created.prompt);
-    let landed = land(spec);
+    let landed = land(created.prompt);
     let range = { from: wt.base, to: landed.sha };
 
     const runChecks = async (): Promise<VerifyResult> => {
@@ -525,7 +549,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         ...(timedOut ? { timedOut: true } : {}),
       });
       if (!ac.signal.aborted) {
-        landed = land(spec);
+        landed = land(created.prompt);
         range = { from: wt.base, to: landed.sha };
         verify = await runChecks();
       }

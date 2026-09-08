@@ -297,7 +297,7 @@ async function main(argv: string[]): Promise<number> {
       }
       for (const r of runs) {
         process.stdout.write(
-          `${r.runId} ${r.project} ${r.outcome}${r.blocked ? " blocked" : ""} ${r.createdAt}\n`,
+          `${r.runId} ${r.project} ${r.outcome} ${r.blocked ? "blocked" : "-"} ${r.createdAt}\n`,
         );
       }
       process.stdout.write(`${tallyLine(runs)}\n`);
