@@ -549,15 +549,23 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       } else {
         const reviewPrompt = join(runDir(runId), "review-prompt.txt");
         const diff = diffText(tree, range);
+        const assumptionsFile = join(tree, "ASSUMPTIONS.md");
+        const assumptions: string[] = [];
+        if (existsSync(assumptionsFile)) {
+          assumptions.push("ASSUMPTIONS.md:", readFileSync(assumptionsFile, "utf8"), "");
+        }
         writeFileSync(
           reviewPrompt,
           [
+            "You may read files and run git in this worktree. Do not modify anything. Judge the diff against the task and the repo's conventions. A blocking issue is a bug, a security problem, a failing test the change caused, or a wrong assumption in ASSUMPTIONS.md. Do not review style.",
+            "",
             "list bugs and risks, then one line: APPROVE or REJECT",
             "",
             ...verifyHeadlineLines(verify),
             "",
             verify.testTail,
             "",
+            ...assumptions,
             "Diff:",
             diff,
             "",

@@ -57,7 +57,7 @@ runhub run --cwd /home/jrm22n/hycom --review claude --prompt "fix the login bug"
 runhub merge <runId>
 ```
 
-`--agent` is `cursor` or `claude` (default cursor). `--model` overrides the per-agent default. `--review claude` runs after verify, reads the committed diff plus the test tail, and must end with APPROVE or REJECT. The reviewer runs read-only, with no tools.
+`--agent` is `cursor` or `claude` (default cursor). `--model` overrides the per-agent default. `--review claude` runs after verify, reads the committed diff plus the test tail, and must end with APPROVE or REJECT. The reviewer may Read, Glob, Grep, and `Bash(git *)` in the worktree. It does not get Write, Edit, or unrestricted Bash. The review prompt says not to modify anything and not to review style. If `ASSUMPTIONS.md` exists in the worktree, its contents go into the prompt.
 
 `merge` squash-merges the PR when one was opened. Otherwise it runs `git -C <cwd> merge runhub/<runId>`.
 

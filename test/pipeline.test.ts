@@ -111,7 +111,9 @@ print('{"type":"result","result":"committed STAMP.txt"}')
 test("the reviewer reads the committed diff, not the pre-commit tree", async () => {
   await withEnv(async () => {
     const work = tempDir("work");
-    gitRepo(work);
+    gitRepo(work, [
+      { path: "ASSUMPTIONS.md", body: "ASSUMED: keep the existing README because the task did not say otherwise\n" },
+    ]);
     const binDir = tempDir("bin");
     writeFakeAgent(binDir);
     const stdinLog = join(binDir, "review-stdin.txt");
@@ -137,6 +139,8 @@ print("APPROVE")
 
     const captured = readFileSync(stdinLog, "utf8");
     assert.match(captured, /tests: true {2}exit 0/);
+    assert.match(captured, /^You may read files and run git in this worktree/);
+    assert.match(captured, /ASSUMPTIONS\.md:\nASSUMED: keep the existing README/);
     const marker = captured.indexOf("Diff:");
     assert.ok(marker > 0, `no Diff: section: ${captured}`);
     const diff = captured.slice(marker);
@@ -344,6 +348,10 @@ print("REJECT")
     assert.equal(result.failed, false);
     const reviewPrompt = readFileSync(join(runDir(result.runId), "review-prompt.txt"), "utf8");
     assert.doesNotMatch(reviewPrompt, /You are running unattended/);
+    assert.match(
+      reviewPrompt,
+      /^You may read files and run git in this worktree\. Do not modify anything\./,
+    );
     prune(0);
   });
 });

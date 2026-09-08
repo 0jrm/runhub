@@ -26,7 +26,7 @@ test("claude argv uses stream-json and skip-permissions", () => {
   assert.equal(argv.includes("/tmp/app"), false);
 });
 
-test("review argv is read-only print text with no tools", () => {
+test("review argv is read-only files and git, not write or unrestricted bash", () => {
   const argv = reviewArgv("claude", "sonnet");
   assert.deepEqual(argv, [
     "claude",
@@ -35,11 +35,15 @@ test("review argv is read-only print text with no tools", () => {
     "text",
     "--model",
     "sonnet",
-    "--tools",
-    "",
+    "--permission-mode",
+    "dontAsk",
+    "--allowedTools",
+    "Read,Glob,Grep,Bash(git *)",
   ]);
   assert.equal(argv.includes("--dangerously-skip-permissions"), false);
-  assert.equal(argv[argv.length - 1], "");
+  assert.equal(argv.includes("--tools"), false);
+  assert.doesNotMatch(argv.join(" "), /\bWrite\b/);
+  assert.doesNotMatch(argv.join(" "), /\bEdit\b/);
 });
 
 test("prompt arrives on stdin not argv", async () => {

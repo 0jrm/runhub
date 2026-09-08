@@ -74,7 +74,18 @@ export function agentArgv(opts: { agent: AgentKind; bin: string; cwd: string; mo
 }
 
 export function reviewArgv(bin: string, model: string): string[] {
-  return [bin, "-p", "--output-format", "text", "--model", model, "--tools", ""];
+  return [
+    bin,
+    "-p",
+    "--output-format",
+    "text",
+    "--model",
+    model,
+    "--permission-mode",
+    "dontAsk",
+    "--allowedTools",
+    "Read,Glob,Grep,Bash(git *)",
+  ];
 }
 
 export function runProcessGroup(opts: {
