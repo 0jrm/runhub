@@ -75,11 +75,15 @@ export function writeProjectsToml(configHome: string, name: string, projectPath:
 
 export function withEnv(fn: () => Promise<void>): Promise<void> {
   const prevXdg = process.env.XDG_DATA_HOME;
+  const prevCfg = process.env.XDG_CONFIG_HOME;
   const prevPath = process.env.PATH;
   process.env.XDG_DATA_HOME = tempDir("xdg");
+  process.env.XDG_CONFIG_HOME = tempDir("xdg-cfg");
   return fn().finally(() => {
     if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdg;
+    if (prevCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevCfg;
     if (prevPath === undefined) delete process.env.PATH;
     else process.env.PATH = prevPath;
   });

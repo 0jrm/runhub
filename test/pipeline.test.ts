@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { runPipeline } from "../src/pipeline.js";
 import {
+  listRuns,
   porcelainPath,
   prune,
   reportPath,
@@ -110,7 +111,9 @@ print('{"type":"result","result":"committed STAMP.txt"}')
 test("the reviewer reads the committed diff, not the pre-commit tree", async () => {
   await withEnv(async () => {
     const work = tempDir("work");
-    gitRepo(work);
+    gitRepo(work, [
+      { path: "ASSUMPTIONS.md", body: "ASSUMED: keep the existing README because the task did not say otherwise\n" },
+    ]);
     const binDir = tempDir("bin");
     writeFakeAgent(binDir);
     const stdinLog = join(binDir, "review-stdin.txt");
@@ -136,6 +139,10 @@ print("APPROVE")
 
     const captured = readFileSync(stdinLog, "utf8");
     assert.match(captured, /tests: true {2}exit 0/);
+    assert.match(captured, /^You may read files in this worktree/);
+    assert.doesNotMatch(captured, /run git/);
+    assert.doesNotMatch(captured, /ASSUMPTIONS\.md:/);
+    assert.match(captured, /^Log:/m);
     const marker = captured.indexOf("Diff:");
     assert.ok(marker > 0, `no Diff: section: ${captured}`);
     const diff = captured.slice(marker);
@@ -341,6 +348,12 @@ print("REJECT")
     assert.match(result.markdown, /review: REJECT/);
     assert.match(result.markdown, /agent: cursor-agent \(/);
     assert.equal(result.failed, false);
+    const reviewPrompt = readFileSync(join(runDir(result.runId), "review-prompt.txt"), "utf8");
+    assert.doesNotMatch(reviewPrompt, /You are running unattended/);
+    assert.match(
+      reviewPrompt,
+      /^You may read files in this worktree\. Do not modify anything\./,
+    );
     prune(0);
   });
 });
@@ -380,6 +393,9 @@ print('{"type":"result","result":"call %s","usage":{"inputTokens":1100,"outputTo
     assert.match(result.markdown, /retry: 1, tests then passed/);
     assert.match(result.markdown, /usage agent: 1k in \/ 20 out/);
     assert.match(result.markdown, /usage retry: 1k in \/ 20 out/);
+    const retryBody = readFileSync(join(runDir(result.runId), "retry-prompt.txt"), "utf8");
+    assert.match(retryBody, /You are running unattended/);
+    assert.match(retryBody, /Tests failed/);
     prune(0);
   });
 });
@@ -546,6 +562,396 @@ test("a successful push without gh prints pushed: remote/branch", async () => {
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /push_recorded/);
     assert.doesNotMatch(events, /pr_opened/);
+    prune(0);
+  });
+});
+
+test("preamble source is project, then user, then built-in", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+    const spec = "SPEC-BODY-ONLY\n";
+    const cfg = process.env.XDG_CONFIG_HOME ?? "";
+    mkdirSync(join(cfg, "runhub"), { recursive: true });
+
+    const builtin = await runPipeline({ cwd: work, prompt: spec, testCmd: "true", timeoutMs: 15_000 });
+    const builtinPrompt = readFileSync(join(runDir(builtin.runId), "prompt.txt"), "utf8");
+    assert.equal(readFileSync(join(runDir(builtin.runId), "spec.txt"), "utf8"), spec);
+    assert.match(builtinPrompt, /^You are running unattended/);
+    assert.equal(builtinPrompt, `${readFileSync(join(runDir(builtin.runId), "preamble.txt"), "utf8")}\n\n---\n\n${spec}`);
+    prune(0);
+
+    writeFileSync(join(cfg, "runhub", "preamble.md"), "USER-PREAMBLE\n");
+    const user = await runPipeline({ cwd: work, prompt: spec, testCmd: "true", timeoutMs: 15_000 });
+    assert.match(readFileSync(join(runDir(user.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    assert.doesNotMatch(readFileSync(join(runDir(user.runId), "prompt.txt"), "utf8"), /You are running unattended/);
+    prune(0);
+
+    const projectFile = join(work, "project-preamble.md");
+    writeFileSync(projectFile, "PROJECT-PREAMBLE\n");
+    const project = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      preambleFile: "project-preamble.md",
+    });
+    assert.match(readFileSync(join(runDir(project.runId), "prompt.txt"), "utf8"), /^PROJECT-PREAMBLE/);
+    assert.doesNotMatch(readFileSync(join(runDir(project.runId), "prompt.txt"), "utf8"), /USER-PREAMBLE/);
+    prune(0);
+
+    writeFileSync(projectFile, "   \n");
+    const emptyProject = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      preambleFile: "project-preamble.md",
+    });
+    assert.match(readFileSync(join(runDir(emptyProject.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    assert.match(
+      readFileSync(join(runsRoot(), emptyProject.runId, "events.jsonl"), "utf8"),
+      /project preamble missing or empty/,
+    );
+    prune(0);
+
+    const missing = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      preambleFile: "no-such-preamble.md",
+    });
+    assert.match(readFileSync(join(runDir(missing.runId), "prompt.txt"), "utf8"), /^USER-PREAMBLE/);
+    assert.match(
+      readFileSync(join(runsRoot(), missing.runId, "events.jsonl"), "utf8"),
+      /project preamble missing or empty/,
+    );
+  });
+});
+
+test("noPreamble writes the spec alone and commit message stays on the spec", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    process.env.PATH = prependPath(binDir);
+    const spec = "edit the readme and add a file";
+    const result = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 15_000,
+      noPreamble: true,
+    });
+    assert.equal(readFileSync(join(runDir(result.runId), "prompt.txt"), "utf8"), spec);
+    assert.equal(readFileSync(join(runDir(result.runId), "spec.txt"), "utf8"), spec);
+    const tree = worktreePath(result.runId);
+    const subject = spawnSync("git", ["log", "-1", "--format=%s"], { cwd: tree, encoding: "utf8" }).stdout.trim();
+    assert.equal(subject, `runhub: ${spec}`);
+    prune(0);
+  });
+});
+
+test("commit message and PR title come from the spec, not the preamble", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+exit 0
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    writeFileSync(join(binDir, "preamble.md"), "PREAMBLE-MUST-NOT-BE-TITLE\n");
+    const spec = "SPEC-TITLE-ONLY please";
+    const result = await runPipeline({
+      cwd: work,
+      prompt: spec,
+      testCmd: "true",
+      timeoutMs: 20_000,
+      remote: "origin",
+      preambleFile: join(binDir, "preamble.md"),
+    });
+    const subject = spawnSync("git", ["log", "-1", "--format=%s"], {
+      cwd: worktreePath(result.runId),
+      encoding: "utf8",
+    }).stdout.trim();
+    assert.equal(subject, `runhub: ${spec}`);
+    const logged = readFileSync(argvLog, "utf8");
+    assert.match(logged, /--title SPEC-TITLE-ONLY please/);
+    assert.doesNotMatch(logged, /PREAMBLE-MUST-NOT-BE-TITLE/);
+    prune(0);
+  });
+});
+
+test("BLOCKED at line start is reported and listed, mid-line is not", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import json
+open("STAMP.txt", "w").write("x\\n")
+print(json.dumps({"type":"result","result":"did work\\nBLOCKED: delete prod? | options: yes / no"}))
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({ cwd: work, prompt: "edit", testCmd: "true", timeoutMs: 15_000 });
+    assert.match(result.markdown, /^pass  /);
+    assert.match(result.markdown, /^blocked: BLOCKED: delete prod\? \| options: yes \/ no$/m);
+    const listed = listRuns();
+    const row = listed.find((r) => r.runId === result.runId);
+    assert.equal(row?.blocked, true);
+    prune(0);
+
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import json
+open("STAMP2.txt", "w").write("x\\n")
+print(json.dumps({"type":"result","result":"said BLOCKED: not at line start"}))
+`,
+    );
+    const mid = await runPipeline({ cwd: work, prompt: "edit again", testCmd: "true", timeoutMs: 15_000 });
+    assert.doesNotMatch(mid.markdown, /^blocked: /m);
+    const listed2 = listRuns();
+    assert.equal(listed2.find((r) => r.runId === mid.runId)?.blocked, false);
+    prune(0);
+  });
+});
+
+test("BLOCKED with failing tests does not retry and keeps the dotted line", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import json
+from pathlib import Path
+n = int(Path(".agent-calls").read_text()) + 1 if Path(".agent-calls").exists() else 1
+Path(".agent-calls").write_text(str(n))
+Path("FAIL.txt").write_text("broken\\n")
+Path("STAMP.txt").write_text("x\\n")
+print(json.dumps({"type":"result","result":"BLOCKED: drop the users.Email column? | options: yes / no"}))
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "test ! -f FAIL.txt",
+      timeoutMs: 15_000,
+    });
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.doesNotMatch(events, /retry_started/);
+    assert.match(
+      result.markdown,
+      /^blocked: BLOCKED: drop the users\.Email column\? \| options: yes \/ no$/m,
+    );
+    const calls = readFileSync(join(worktreePath(result.runId), ".agent-calls"), "utf8").trim();
+    assert.equal(calls, "1");
+    prune(0);
+  });
+});
+
+test("gh pr comment posts only when a PR URL exists", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then exit 0; fi
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("- small")
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const withPr = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    const logged = readFileSync(argvLog, "utf8");
+    assert.match(logged, /pr comment https:\/\/github.com\/0jrm\/toy\/pull\/9 --body-file /);
+    assert.match(withPr.markdown, /^review-comment: posted$/m);
+    const events = readFileSync(join(runsRoot(), withPr.runId, "events.jsonl"), "utf8");
+    assert.match(events, /"kind":"review_comment_recorded".*"status":"posted"/);
+    const body = readFileSync(join(runDir(withPr.runId), "review-comment.md"), "utf8");
+    assert.equal(body.split("\n")[0], `runhub review — APPROVE — run ${withPr.runId}`);
+    assert.match(body, /^- small$/m);
+    assert.match(body, /^APPROVE$/m);
+    assert.doesNotMatch(body, /print\(/);
+    assert.equal(withPr.failed, false);
+    prune(0);
+  });
+});
+
+test("an empty review does not post a PR comment", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+pass
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    const logged = readFileSync(argvLog, "utf8");
+    assert.doesNotMatch(logged, /pr comment /);
+    assert.doesNotMatch(result.markdown, /review-comment:/);
+    assert.equal(existsSync(join(runDir(result.runId), "review-comment.md")), false);
+    prune(0);
+  });
+});
+
+test("review with no PR does not post a comment or add a report line", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+    });
+    assert.equal(existsSync(argvLog), false);
+    assert.doesNotMatch(result.markdown, /review-comment:/);
+    assert.equal(existsSync(join(runDir(result.runId), "review-comment.md")), false);
+    prune(0);
+  });
+});
+
+test("a failed gh pr comment does not change outcome", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then echo "boom-comment" >&2; exit 1; fi
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+print("APPROVE")
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    assert.match(result.markdown, /^pass  /);
+    assert.match(result.markdown, /^review-comment: failed$/m);
+    assert.equal(result.failed, false);
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.match(events, /gh pr comment failed: boom-comment/);
+    assert.match(events, /"kind":"review_comment_recorded".*"status":"failed"/);
     prune(0);
   });
 });

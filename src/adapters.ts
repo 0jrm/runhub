@@ -73,8 +73,26 @@ export function agentArgv(opts: { agent: AgentKind; bin: string; cwd: string; mo
   }
 }
 
+export const REVIEW_ALLOWED_TOOLS = "Read,Glob,Grep";
+export const REVIEW_DISALLOWED_TOOLS = "Write,Edit,MultiEdit,NotebookEdit";
+
 export function reviewArgv(bin: string, model: string): string[] {
-  return [bin, "-p", "--output-format", "text", "--model", model, "--tools", ""];
+  return [
+    bin,
+    "-p",
+    "--output-format",
+    "text",
+    "--model",
+    model,
+    "--permission-mode",
+    "dontAsk",
+    "--tools",
+    REVIEW_ALLOWED_TOOLS,
+    "--allowedTools",
+    REVIEW_ALLOWED_TOOLS,
+    "--disallowedTools",
+    REVIEW_DISALLOWED_TOOLS,
+  ];
 }
 
 export function runProcessGroup(opts: {

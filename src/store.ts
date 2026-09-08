@@ -53,6 +53,14 @@ export function promptPath(runId: RunId): string {
   return join(runDir(runId), "prompt.txt");
 }
 
+export function specPath(runId: RunId): string {
+  return join(runDir(runId), "spec.txt");
+}
+
+export function preamblePath(runId: RunId): string {
+  return join(runDir(runId), "preamble.txt");
+}
+
 export function reportPath(runId: RunId): string {
   return join(runDir(runId), "report.md");
 }
@@ -101,6 +109,7 @@ export type ListedRun = {
   createdAt: string;
   project: string;
   outcome: ReturnType<typeof listOutcome>;
+  blocked: boolean;
 };
 
 export function listRuns(now = Date.now()): ListedRun[] {
@@ -118,6 +127,7 @@ export function listRuns(now = Date.now()): ListedRun[] {
         createdAt: view.createdAt,
         project: basename(view.cwd),
         outcome: listOutcome(view, now, pidAlive(view.pipelinePid)),
+        blocked: view.blockedLine !== undefined,
       });
     } catch {
       continue;

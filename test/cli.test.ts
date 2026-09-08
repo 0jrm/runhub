@@ -34,6 +34,14 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /unknown flag --cheap/);
 
+  const valued = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", "/tmp", "--prompt", "x", "--no-preamble=false"],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(valued.status, 0);
+  assert.match(valued.stderr, /flag --no-preamble takes no value/);
+
   const agent = spawnSync(
     process.execPath,
     [cli, "run", "--cwd", "/tmp", "--prompt", "x", "--agent", "codex"],
@@ -140,7 +148,7 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
     const last = stdout.trimEnd().split("\n").pop() ?? "";
     const m = last.match(/^runhub: ([0-9a-f-]{36})$/);
     assert.ok(m?.[1], `missing id: ${JSON.stringify(stdout)}`);
-    return readFileSync(join(xdg, "runhub", "runs", m[1], "prompt.txt"), "utf8");
+    return readFileSync(join(xdg, "runhub", "runs", m[1], "spec.txt"), "utf8");
   };
 
   const fromFile = spawnSync(process.execPath, [...base, "--prompt-file", specPath], {
@@ -169,6 +177,22 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
   const neither = spawnSync(process.execPath, base, { encoding: "utf8", env });
   assert.notEqual(neither.status, 0);
   assert.match(neither.stderr, /run requires --prompt or --prompt-file/);
+
+  const withPre = spawnSync(process.execPath, [...base, "--prompt", spec], { encoding: "utf8", env });
+  assert.equal(withPre.status, 0, withPre.stderr);
+  const withPreId = (withPre.stdout.trim().match(/runhub: ([0-9a-f-]{36})/) ?? [])[1];
+  assert.ok(withPreId);
+  assert.match(readFileSync(join(xdg, "runhub", "runs", withPreId, "prompt.txt"), "utf8"), /You are running unattended/);
+
+  const noPre = spawnSync(process.execPath, [...base, "--prompt", spec, "--no-preamble"], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(noPre.status, 0, noPre.stderr);
+  const noPreId = (noPre.stdout.trim().match(/runhub: ([0-9a-f-]{36})/) ?? [])[1];
+  assert.ok(noPreId);
+  assert.equal(readFileSync(join(xdg, "runhub", "runs", noPreId, "prompt.txt"), "utf8"), spec);
+  assert.equal(readFileSync(join(xdg, "runhub", "runs", noPreId, "spec.txt"), "utf8"), spec);
 });
 
 test("wait times out with exit 3 while a sleeping agent keeps running", async () => {

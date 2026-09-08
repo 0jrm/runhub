@@ -87,6 +87,12 @@ export function reduce(events: readonly Event[]): RunView {
         view.reviewVerdict = ev.verdict;
         view.reviewBody = ev.body;
         break;
+      case "review_comment_recorded":
+        view.reviewComment = ev.status;
+        break;
+      case "blocked_recorded":
+        view.blockedLine = ev.line;
+        break;
       case "pr_opened":
         view.prUrl = ev.url;
         break;

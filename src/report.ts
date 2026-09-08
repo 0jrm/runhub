@@ -14,7 +14,24 @@ import {
   type VerifyResult,
 } from "./domain.js";
 
-export function extractFinalMessage(raw: string): string {
+export function blockedLine(finalMessage: string): string | undefined {
+  const lines = finalMessage.split(/\r?\n/).map((l) => l.trim());
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const last = lines[lines.length - 1];
+  if (last === undefined) return undefined;
+  const bare = last
+    .replace(/^[>\s]*/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^[`*_]+/, "")
+    .trim();
+  if (!bare.startsWith("BLOCKED:")) return undefined;
+  return bare
+    .replace(/^BLOCKED:[`*_]*/, "BLOCKED:")
+    .replace(/[`*_]+$/, "")
+    .trim();
+}
+
+export function lastResultText(raw: string): string | undefined {
   const slice = raw.length > 256_000 ? raw.slice(raw.length - 256_000) : raw;
   let found: string | undefined;
   for (const line of slice.split("\n")) {
@@ -26,15 +43,20 @@ export function extractFinalMessage(raw: string): string {
       const rec = obj as Record<string, unknown>;
       if (rec.type !== "result") continue;
       const v = rec.result;
-      if (typeof v === "string" && v.trim().length > 0) found = v;
+      if (typeof v === "string" && v.trim().length > 0) found = v.trim();
     } catch {
       continue;
     }
   }
+  return found;
+}
+
+export function extractFinalMessage(raw: string): string {
+  const found = lastResultText(raw);
   if (found === undefined) {
     return "(no final message; stream-json format may have changed, run npm run contract)";
   }
-  return found.trim().replace(/\.([A-Z])/g, ".\n\n$1");
+  return found.replace(/\.([A-Z])/g, ".\n\n$1");
 }
 
 export function parseReview(raw: string): { verdict: Verdict; extra: string[] } {
@@ -188,6 +210,7 @@ export function renderReport(
   const took = tookLine(view);
   if (took !== undefined) head.push(took);
   const lines: string[] = [head.join("  ")];
+  if (view.blockedLine !== undefined) lines.push(`blocked: ${view.blockedLine}`);
   lines.push("");
 
   if (view.branch) {
@@ -229,6 +252,9 @@ export function renderReport(
     lines.push(`review: ${view.reviewVerdict}`);
     for (const line of parseReview(view.reviewBody ?? "").extra) lines.push(line);
   }
+
+  if (view.reviewComment === "posted") lines.push("review-comment: posted");
+  else if (view.reviewComment === "failed") lines.push("review-comment: failed");
 
   if (view.errors.length > 0) {
     lines.push("");

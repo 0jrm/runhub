@@ -21,7 +21,7 @@ import { executePipeline, prepareRun } from "./pipeline.js";
 const USAGE = `runhub <command>
 
 Commands:
-  run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>]
+  run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>] [--no-preamble]
   wait <runId> [--timeout <duration>]
   merge <runId>
   status [runId]
@@ -41,13 +41,19 @@ const RUN_FLAGS = new Set([
   "agent",
   "model",
   "review",
+  "no-preamble",
 ]);
+const RUN_SWITCHES = new Set(["no-preamble"]);
 const WAIT_FLAGS = new Set(["timeout"]);
 const PRUNE_FLAGS = new Set(["keep"]);
 
 type FlagMap = Map<string, string>;
 
-function parseFlags(args: string[], allowed: Set<string>): { positional: string[]; flags: FlagMap } {
+function parseFlags(
+  args: string[],
+  allowed: Set<string>,
+  switches: Set<string> = new Set(),
+): { positional: string[]; flags: FlagMap } {
   const positional: string[] = [];
   const flags: FlagMap = new Map();
   for (let i = 0; i < args.length; i++) {
@@ -59,10 +65,15 @@ function parseFlags(args: string[], allowed: Set<string>): { positional: string[
       let value: string | undefined;
       if (eq !== -1) {
         key = a.slice(2, eq);
+        if (switches.has(key)) throw new Error(`flag --${key} takes no value`);
         value = a.slice(eq + 1);
       } else {
         key = a.slice(2);
         if (!allowed.has(key)) throw new Error(`unknown flag --${key}`);
+        if (switches.has(key)) {
+          flags.set(key, "");
+          continue;
+        }
         const next = args[i + 1];
         if (next === undefined || next.startsWith("--")) {
           throw new Error(`flag --${key} requires a value`);
@@ -180,7 +191,7 @@ async function main(argv: string[]): Promise<number> {
 
   switch (command) {
     case "run": {
-      const { flags } = parseFlags(rest, RUN_FLAGS);
+      const { flags } = parseFlags(rest, RUN_FLAGS, RUN_SWITCHES);
       const cwdRaw = flags.get("cwd");
       if (cwdRaw === undefined) throw new Error("run requires --cwd");
       const prompt = readPrompt(promptSource(flags));
@@ -197,6 +208,8 @@ async function main(argv: string[]): Promise<number> {
         typecheckCmd: resolved.typecheck,
         lintCmd: resolved.lint,
         remote: resolved.remote,
+        preambleFile: resolved.preamble,
+        noPreamble: flags.has("no-preamble"),
         agent,
         model: flags.get("model") ?? defaultModel(agent),
         review,
@@ -284,7 +297,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       for (const r of runs) {
-        process.stdout.write(`${r.runId} ${r.project} ${r.outcome} ${r.createdAt}\n`);
+        process.stdout.write(
+          `${r.runId} ${r.project} ${r.outcome} ${r.blocked ? "blocked" : "-"} ${r.createdAt}\n`,
+        );
       }
       process.stdout.write(`${tallyLine(runs)}\n`);
       return 0;

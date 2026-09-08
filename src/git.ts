@@ -120,6 +120,12 @@ export function diffText(cwd: string, range: DiffRange): string {
   return gitText(cwd, ["diff", `${range.from}..${range.to}`]);
 }
 
+export function logOnelineText(cwd: string, range: DiffRange, maxLines = 20): string {
+  const text = gitText(cwd, ["log", "--oneline", `${range.from}..${range.to}`]);
+  if (text.length === 0) return "";
+  return text.split("\n").filter((line) => line.length > 0).slice(0, maxLines).join("\n");
+}
+
 export function diffStatText(cwd: string, range: DiffRange): string {
   return gitText(cwd, ["diff", "--stat", `${range.from}..${range.to}`]);
 }

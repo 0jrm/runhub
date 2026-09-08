@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CURSOR_MODEL } from "../src/domain.js";
-import { agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
+import { REVIEW_ALLOWED_TOOLS, REVIEW_DISALLOWED_TOOLS, agentArgv, reviewArgv, runProcessGroup } from "../src/adapters.js";
 import { tempDir, writeBin } from "./helpers.js";
 
 test("cursor argv pins Grok 4.6 medium, --force, and omits the prompt", () => {
@@ -26,7 +26,7 @@ test("claude argv uses stream-json and skip-permissions", () => {
   assert.equal(argv.includes("/tmp/app"), false);
 });
 
-test("review argv is read-only print text with no tools", () => {
+test("review argv is Read, Glob, Grep with no shell", () => {
   const argv = reviewArgv("claude", "sonnet");
   assert.deepEqual(argv, [
     "claude",
@@ -35,11 +35,20 @@ test("review argv is read-only print text with no tools", () => {
     "text",
     "--model",
     "sonnet",
+    "--permission-mode",
+    "dontAsk",
     "--tools",
-    "",
+    REVIEW_ALLOWED_TOOLS,
+    "--allowedTools",
+    REVIEW_ALLOWED_TOOLS,
+    "--disallowedTools",
+    REVIEW_DISALLOWED_TOOLS,
   ]);
   assert.equal(argv.includes("--dangerously-skip-permissions"), false);
-  assert.equal(argv[argv.length - 1], "");
+  assert.equal(REVIEW_ALLOWED_TOOLS, "Read,Glob,Grep");
+  assert.equal(REVIEW_DISALLOWED_TOOLS, "Write,Edit,MultiEdit,NotebookEdit");
+  assert.doesNotMatch(argv.join(" "), /\bBash\b/);
+  assert.doesNotMatch(argv.join(" "), /\bgit\b/);
 });
 
 test("prompt arrives on stdin not argv", async () => {

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { reduceJsonl } from "../src/reduce.js";
-import { extractFinalMessage, mergeCommand, parseReview, renderReport } from "../src/report.js";
+import { extractFinalMessage, lastResultText, mergeCommand, parseReview, renderReport, blockedLine } from "../src/report.js";
 import { extractUsages } from "../src/domain.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test/fixtures/sample.jsonl");
@@ -24,6 +24,28 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
   assert.match(md, /merge: git -C '\/tmp\/app' merge runhub\//);
   assert.doesNotMatch(md, /porcelain/);
   assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
+});
+
+test("BLOCKED matches only the last line, through list and emphasis wrappers", () => {
+  assert.equal(blockedLine("BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("note BLOCKED: mid"), undefined);
+  assert.equal(blockedLine("BLOCKED: first\nstill going"), undefined);
+  assert.equal(blockedLine("  BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("- BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("**BLOCKED:** stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("`BLOCKED: stop | options: a / b`"), "BLOCKED: stop | options: a / b");
+  const dotted =
+    '{"type":"result","result":"BLOCKED: drop the users.Email column? | options: yes / no"}';
+  const raw = lastResultText(`${dotted}\n`);
+  assert.equal(raw, "BLOCKED: drop the users.Email column? | options: yes / no");
+  assert.equal(blockedLine(raw ?? ""), "BLOCKED: drop the users.Email column? | options: yes / no");
+  const v = view();
+  v.blockedLine = "BLOCKED: delete? | options: yes / no";
+  const md = renderReport(v, {
+    agentStdout: '{"type":"result","result":"ok\\nBLOCKED: delete? | options: yes / no"}\n',
+    agentStderr: "",
+  });
+  assert.match(md, /^pass  app  took 0m 07s\nblocked: BLOCKED: delete\? \| options: yes \/ no\n/);
 });
 
 test("merge quotes the cwd so a path with spaces still runs", () => {
@@ -130,6 +152,18 @@ test("REJECT review keeps pass on line one", () => {
   const md = renderReport(v, { agentStdout: "", agentStderr: "" });
   assert.match(md, /^pass  app  took 0m 07s\n/);
   assert.match(md, /review: REJECT/);
+});
+
+test("review-comment line is posted or failed", () => {
+  const v = view();
+  v.reviewVerdict = "APPROVE";
+  v.reviewBody = "APPROVE\n";
+  v.reviewComment = "posted";
+  assert.match(renderReport(v, { agentStdout: "", agentStderr: "" }), /^review-comment: posted$/m);
+  v.reviewComment = "failed";
+  assert.match(renderReport(v, { agentStdout: "", agentStderr: "" }), /^review-comment: failed$/m);
+  delete v.reviewComment;
+  assert.doesNotMatch(renderReport(v, { agentStdout: "", agentStderr: "" }), /review-comment:/);
 });
 
 test("extractUsages reads cursor-agent result.usage camelCase and keeps counts under 1000 exact", () => {

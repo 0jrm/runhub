@@ -95,6 +95,42 @@ test("listRuns shows project basename, outcome, and stale", () => {
     assert.equal(stale?.project, "markitdown");
     assert.equal(stale?.outcome, "stale");
     assert.equal(byId.get(untestedId)?.outcome, "changed-untested");
+    assert.equal(done?.blocked, false);
+
+    const blockedId = toRunId("run-list-block01");
+    mkdirSync(runDir(blockedId), { recursive: true });
+    writeFileSync(
+      join(runDir(blockedId), "events.jsonl"),
+      [
+        {
+          kind: "run_created",
+          ts: "2026-01-04T00:00:00.000Z",
+          runId: blockedId,
+          prompt: "p",
+          cwd: "/tmp/app",
+          timeoutMs: 1000,
+        },
+        {
+          kind: "blocked_recorded",
+          ts: "2026-01-04T00:00:00.500Z",
+          runId: blockedId,
+          line: "BLOCKED: pick a / b | options: a / b",
+        },
+        {
+          kind: "run_finished",
+          ts: "2026-01-04T00:00:01.000Z",
+          runId: blockedId,
+          status: "done",
+          summary: "pass",
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n",
+      "utf8",
+    );
+    const listed2 = listRuns(Date.parse("2026-01-01T00:00:05.000Z"));
+    assert.equal(listed2.find((r) => r.runId === blockedId)?.blocked, true);
+
     assert.equal(
       tallyLine(listed),
       "last 30: 0 pass, 1 fail, 1 changed-untested, 0 no-changes, 0 running",
