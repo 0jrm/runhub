@@ -65,6 +65,7 @@ function parseFlags(
       let value: string | undefined;
       if (eq !== -1) {
         key = a.slice(2, eq);
+        if (switches.has(key)) throw new Error(`flag --${key} takes no value`);
         value = a.slice(eq + 1);
       } else {
         key = a.slice(2);

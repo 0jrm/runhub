@@ -26,10 +26,14 @@ test("phone report shows diff-stat, branch, merge, not porcelain", () => {
   assert.match(md, /agent: cursor-agent \(cursor-agent\)\npatched the test/);
 });
 
-test("BLOCKED matches only the last line at column 0", () => {
+test("BLOCKED matches only the last line, through list and emphasis wrappers", () => {
   assert.equal(blockedLine("BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
   assert.equal(blockedLine("note BLOCKED: mid"), undefined);
   assert.equal(blockedLine("BLOCKED: first\nstill going"), undefined);
+  assert.equal(blockedLine("  BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("- BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("**BLOCKED:** stop | options: a / b"), "BLOCKED: stop | options: a / b");
+  assert.equal(blockedLine("`BLOCKED: stop | options: a / b`"), "BLOCKED: stop | options: a / b");
   const dotted =
     '{"type":"result","result":"BLOCKED: drop the users.Email column? | options: yes / no"}';
   const raw = lastResultText(`${dotted}\n`);

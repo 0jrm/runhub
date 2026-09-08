@@ -34,6 +34,14 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /unknown flag --cheap/);
 
+  const valued = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", "/tmp", "--prompt", "x", "--no-preamble=false"],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(valued.status, 0);
+  assert.match(valued.stderr, /flag --no-preamble takes no value/);
+
   const agent = spawnSync(
     process.execPath,
     [cli, "run", "--cwd", "/tmp", "--prompt", "x", "--agent", "codex"],

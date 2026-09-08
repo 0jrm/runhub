@@ -15,11 +15,20 @@ import {
 } from "./domain.js";
 
 export function blockedLine(finalMessage: string): string | undefined {
-  const lines = finalMessage.split(/\r?\n/);
+  const lines = finalMessage.split(/\r?\n/).map((l) => l.trim());
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   const last = lines[lines.length - 1];
-  if (last !== undefined && last.startsWith("BLOCKED:")) return last;
-  return undefined;
+  if (last === undefined) return undefined;
+  const bare = last
+    .replace(/^[>\s]*/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^[`*_]+/, "")
+    .trim();
+  if (!bare.startsWith("BLOCKED:")) return undefined;
+  return bare
+    .replace(/^BLOCKED:[`*_]*/, "BLOCKED:")
+    .replace(/[`*_]+$/, "")
+    .trim();
 }
 
 export function lastResultText(raw: string): string | undefined {
