@@ -139,8 +139,10 @@ print("APPROVE")
 
     const captured = readFileSync(stdinLog, "utf8");
     assert.match(captured, /tests: true {2}exit 0/);
-    assert.match(captured, /^You may read files and run git in this worktree/);
-    assert.match(captured, /ASSUMPTIONS\.md:\nASSUMED: keep the existing README/);
+    assert.match(captured, /^You may read files in this worktree/);
+    assert.doesNotMatch(captured, /run git/);
+    assert.doesNotMatch(captured, /ASSUMPTIONS\.md:/);
+    assert.match(captured, /^Log:/m);
     const marker = captured.indexOf("Diff:");
     assert.ok(marker > 0, `no Diff: section: ${captured}`);
     const diff = captured.slice(marker);
@@ -350,7 +352,7 @@ print("REJECT")
     assert.doesNotMatch(reviewPrompt, /You are running unattended/);
     assert.match(
       reviewPrompt,
-      /^You may read files and run git in this worktree\. Do not modify anything\./,
+      /^You may read files in this worktree\. Do not modify anything\./,
     );
     prune(0);
   });
@@ -738,6 +740,43 @@ print(json.dumps({"type":"result","result":"said BLOCKED: not at line start"}))
   });
 });
 
+test("BLOCKED with failing tests does not retry and keeps the dotted line", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const binDir = tempDir("bin");
+    writeBin(
+      binDir,
+      "cursor-agent",
+      `#!/usr/bin/env python3
+import json
+from pathlib import Path
+n = int(Path(".agent-calls").read_text()) + 1 if Path(".agent-calls").exists() else 1
+Path(".agent-calls").write_text(str(n))
+Path("FAIL.txt").write_text("broken\\n")
+Path("STAMP.txt").write_text("x\\n")
+print(json.dumps({"type":"result","result":"BLOCKED: drop the users.Email column? | options: yes / no"}))
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "test ! -f FAIL.txt",
+      timeoutMs: 15_000,
+    });
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.doesNotMatch(events, /retry_started/);
+    assert.match(
+      result.markdown,
+      /^blocked: BLOCKED: drop the users\.Email column\? \| options: yes \/ no$/m,
+    );
+    const calls = readFileSync(join(worktreePath(result.runId), ".agent-calls"), "utf8").trim();
+    assert.equal(calls, "1");
+    prune(0);
+  });
+});
+
 test("gh pr comment posts only when a PR URL exists", async () => {
   await withEnv(async () => {
     const work = tempDir("work");
@@ -783,7 +822,54 @@ print("APPROVE")
     assert.match(events, /"kind":"review_comment_recorded".*"status":"posted"/);
     const body = readFileSync(join(runDir(withPr.runId), "review-comment.md"), "utf8");
     assert.equal(body.split("\n")[0], `runhub review — APPROVE — run ${withPr.runId}`);
+    assert.match(body, /^- small$/m);
+    assert.match(body, /^APPROVE$/m);
+    assert.doesNotMatch(body, /print\(/);
     assert.equal(withPr.failed, false);
+    prune(0);
+  });
+});
+
+test("an empty review does not post a PR comment", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeFakeAgent(binDir);
+    const argvLog = join(binDir, "gh-argv.txt");
+    writeBin(
+      binDir,
+      "gh",
+      `#!/bin/sh
+echo "$@" >> ${JSON.stringify(argvLog)}
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/0jrm/toy/pull/9"; exit 0; fi
+exit 0
+`,
+    );
+    writeBin(
+      binDir,
+      "claude",
+      `#!/usr/bin/env python3
+pass
+`,
+    );
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "edit",
+      testCmd: "true",
+      review: "claude",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    const logged = readFileSync(argvLog, "utf8");
+    assert.doesNotMatch(logged, /pr comment /);
+    assert.doesNotMatch(result.markdown, /review-comment:/);
+    assert.equal(existsSync(join(runDir(result.runId), "review-comment.md")), false);
     prune(0);
   });
 });

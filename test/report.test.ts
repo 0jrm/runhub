@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { reduceJsonl } from "../src/reduce.js";
-import { extractFinalMessage, mergeCommand, parseReview, renderReport, blockedLine } from "../src/report.js";
+import { extractFinalMessage, lastResultText, mergeCommand, parseReview, renderReport, blockedLine } from "../src/report.js";
 import { extractUsages } from "../src/domain.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test/fixtures/sample.jsonl");
@@ -30,6 +30,11 @@ test("BLOCKED matches only the last line at column 0", () => {
   assert.equal(blockedLine("BLOCKED: stop | options: a / b"), "BLOCKED: stop | options: a / b");
   assert.equal(blockedLine("note BLOCKED: mid"), undefined);
   assert.equal(blockedLine("BLOCKED: first\nstill going"), undefined);
+  const dotted =
+    '{"type":"result","result":"BLOCKED: drop the users.Email column? | options: yes / no"}';
+  const raw = lastResultText(`${dotted}\n`);
+  assert.equal(raw, "BLOCKED: drop the users.Email column? | options: yes / no");
+  assert.equal(blockedLine(raw ?? ""), "BLOCKED: drop the users.Email column? | options: yes / no");
   const v = view();
   v.blockedLine = "BLOCKED: delete? | options: yes / no";
   const md = renderReport(v, {

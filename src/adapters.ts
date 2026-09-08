@@ -73,8 +73,8 @@ export function agentArgv(opts: { agent: AgentKind; bin: string; cwd: string; mo
   }
 }
 
-export const REVIEW_ALLOWED_TOOLS =
-  "Read,Glob,Grep,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git status:*),Bash(git blame:*),Bash(git rev-parse:*),Bash(git ls-files:*)";
+export const REVIEW_ALLOWED_TOOLS = "Read,Glob,Grep";
+export const REVIEW_DISALLOWED_TOOLS = "Write,Edit,MultiEdit,NotebookEdit";
 
 export function reviewArgv(bin: string, model: string): string[] {
   return [
@@ -86,8 +86,12 @@ export function reviewArgv(bin: string, model: string): string[] {
     model,
     "--permission-mode",
     "dontAsk",
+    "--tools",
+    REVIEW_ALLOWED_TOOLS,
     "--allowedTools",
     REVIEW_ALLOWED_TOOLS,
+    "--disallowedTools",
+    REVIEW_DISALLOWED_TOOLS,
   ];
 }
 

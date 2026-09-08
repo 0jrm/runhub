@@ -22,7 +22,7 @@ export function blockedLine(finalMessage: string): string | undefined {
   return undefined;
 }
 
-export function extractFinalMessage(raw: string): string {
+export function lastResultText(raw: string): string | undefined {
   const slice = raw.length > 256_000 ? raw.slice(raw.length - 256_000) : raw;
   let found: string | undefined;
   for (const line of slice.split("\n")) {
@@ -34,15 +34,20 @@ export function extractFinalMessage(raw: string): string {
       const rec = obj as Record<string, unknown>;
       if (rec.type !== "result") continue;
       const v = rec.result;
-      if (typeof v === "string" && v.trim().length > 0) found = v;
+      if (typeof v === "string" && v.trim().length > 0) found = v.trim();
     } catch {
       continue;
     }
   }
+  return found;
+}
+
+export function extractFinalMessage(raw: string): string {
+  const found = lastResultText(raw);
   if (found === undefined) {
     return "(no final message; stream-json format may have changed, run npm run contract)";
   }
-  return found.trim().replace(/\.([A-Z])/g, ".\n\n$1");
+  return found.replace(/\.([A-Z])/g, ".\n\n$1");
 }
 
 export function parseReview(raw: string): { verdict: Verdict; extra: string[] } {

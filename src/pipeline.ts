@@ -22,7 +22,7 @@ import {
 } from "./domain.js";
 import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
 import { runVerify, annotateBaseline } from "./verify.js";
-import { commitMessage, createRunWorktree, diffText, landDirtyWork, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
+import { commitMessage, createRunWorktree, diffText, logOnelineText, landDirtyWork, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
 import {
   agentStderrPath,
   agentStdoutPath,
@@ -41,7 +41,7 @@ import {
   worktreePath,
   writeArtifacts,
 } from "./store.js";
-import { blockedLine, extractFinalMessage, parseReview, renderReportFromFiles, summaryJson, verifyHeadlineLines } from "./report.js";
+import { blockedLine, lastResultText, parseReview, renderReportFromFiles, summaryJson, verifyHeadlineLines } from "./report.js";
 
 export type PipelineOpts = {
   cwd: string;
@@ -120,12 +120,17 @@ function emit(runId: RunId, event: Event): void {
   appendEvent(runId, event);
 }
 
-function recordBlocked(runId: RunId): void {
+function recordBlockedFromStdout(runId: RunId): string | undefined {
+  const existing = loadView(runId).blockedLine;
+  if (existing !== undefined) return existing;
   const stdoutPath = agentStdoutPath(runId);
-  if (!existsSync(stdoutPath)) return;
-  const line = blockedLine(extractFinalMessage(readFileSync(stdoutPath, "utf8")));
-  if (line === undefined) return;
+  if (!existsSync(stdoutPath)) return undefined;
+  const text = lastResultText(readFileSync(stdoutPath, "utf8"));
+  if (text === undefined) return undefined;
+  const line = blockedLine(text);
+  if (line === undefined) return undefined;
   emit(runId, { kind: "blocked_recorded", ts: nowIso(), runId, line });
+  return line;
 }
 
 function emitVerify(runId: RunId, verify: VerifyResult): void {
@@ -267,10 +272,13 @@ function reviewVerdictLabel(verdict: Verdict | undefined): string {
 function maybePostReviewComment(runId: RunId): void {
   const view = loadView(runId);
   if (view.prUrl === undefined) return;
-  if (view.reviewBody === undefined) return;
+  if (view.reviewBody === undefined || view.reviewBody.trim() === "") return;
   if (!ghUsable(view.cwd)) return;
+  const parsed = parseReview(view.reviewBody);
   const bodyPath = join(runDir(runId), "review-comment.md");
   const headlines = view.verify === undefined ? [] : verifyHeadlineLines(view.verify);
+  const verdictLine =
+    view.reviewVerdict === "APPROVE" || view.reviewVerdict === "REJECT" ? ["", view.reviewVerdict] : [];
   writeFileSync(
     bodyPath,
     [
@@ -278,7 +286,8 @@ function maybePostReviewComment(runId: RunId): void {
       "",
       ...headlines,
       "",
-      view.reviewBody,
+      ...parsed.extra,
+      ...verdictLine,
     ].join("\n"),
     "utf8",
   );
@@ -331,7 +340,6 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       return { runId, markdown, failed: view.status === "failed" };
     }
     finalized = true;
-    recordBlocked(runId);
     let view = loadView(runId);
     writeArtifacts(runId, {
       summary: summaryJson(view),
@@ -448,6 +456,8 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       ...(timedOut ? { timedOut: true } : {}),
     });
 
+    const blocked = recordBlockedFromStdout(runId);
+
     if (ac.signal.aborted) return finish();
 
     const land = (prompt: string): ReturnType<typeof landDirtyWork> => {
@@ -503,6 +513,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
     if (
       agentCode === 0 &&
       !timedOut &&
+      blocked === undefined &&
       classifyTest(verify) === "failed" &&
       verify.diffStat.trim() !== "" &&
       verify.alsoFailingOnBase !== true &&
@@ -548,6 +559,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         exitCode: agentCode,
         ...(timedOut ? { timedOut: true } : {}),
       });
+      recordBlockedFromStdout(runId);
       if (!ac.signal.aborted) {
         landed = land(created.prompt);
         range = { from: wt.base, to: landed.sha };
@@ -573,15 +585,12 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       } else {
         const reviewPrompt = join(runDir(runId), "review-prompt.txt");
         const diff = diffText(tree, range);
-        const assumptionsFile = join(tree, "ASSUMPTIONS.md");
-        const assumptions: string[] = [];
-        if (existsSync(assumptionsFile)) {
-          assumptions.push("ASSUMPTIONS.md:", readFileSync(assumptionsFile, "utf8"), "");
-        }
+        const log = logOnelineText(tree, range);
+        const logSection = log.length === 0 ? [] : ["Log:", log, ""];
         writeFileSync(
           reviewPrompt,
           [
-            "You may read files and run git in this worktree. Do not modify anything. Judge the diff against the task and the repo's conventions. A blocking issue is a bug, a security problem, a failing test the change caused, or a wrong assumption in ASSUMPTIONS.md. Do not review style.",
+            "You may read files in this worktree. Do not modify anything. Judge the diff against the task and the repo's conventions. A blocking issue is a bug, a security problem, a failing test the change caused, or a wrong assumption in ASSUMPTIONS.md. Do not review style.",
             "",
             "list bugs and risks, then one line: APPROVE or REJECT",
             "",
@@ -589,7 +598,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
             "",
             verify.testTail,
             "",
-            ...assumptions,
+            ...logSection,
             "Diff:",
             diff,
             "",
