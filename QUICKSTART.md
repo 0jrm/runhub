@@ -1,6 +1,21 @@
 # Quickstart
 
-Three commands from a global install.
+Install once (`Node 20+`):
+
+```bash
+git clone https://github.com/0jrm/runhub.git && cd runhub
+npm install && npm run build && npm install -g .
+```
+
+Then three steps:
+
+```mermaid
+flowchart LR
+  A["1. init --yes"] --> B["edit identity.toml"]
+  B --> C["2. add /path/to/repo"]
+  C --> D["3. run --cwd name --prompt …"]
+  D --> E["report on stdout"]
+```
 
 ## 1. Init
 
@@ -8,9 +23,7 @@ Three commands from a global install.
 runhub init --yes
 ```
 
-Creates `~/.config/runhub/` and copies `identity.toml.example` to `identity.toml` if that file is missing (`chmod 600`). Edit `name` and `email`. `--yes` is noninteractive. `runhub doctor` checks git, gh, cursor-agent, and claude. `runhub init --identity` only touches the identity file.
-
-You need `git`, and either `cursor-agent` or `claude` on PATH (depending on `--agent`). Optional: `gh` for opening PRs.
+Creates `~/.config/runhub/`, copies `identity.toml` if missing (`chmod 600`). Edit `name` and `email`. Optional: `runhub doctor` (needs `git`; `gh` / agents optional).
 
 ## 2. Add a project
 
@@ -18,25 +31,14 @@ You need `git`, and either `cursor-agent` or `claude` on PATH (depending on `--a
 runhub add /home/you/hycom
 ```
 
-That appends a table named after the directory basename to `projects.toml`. `--cwd hycom` (the table name) or the absolute path both work. Paths outside this file are refused.
+Appends a `projects.toml` table named after the folder. `--cwd hycom` or the absolute path both work.
 
 ## 3. Run
 
 ```bash
-runhub run --cwd hycom --prompt "add a one-line comment in README explaining the install step"
+runhub run --cwd hycom --prompt "add a one-line README note about install"
 ```
 
-`run` waits and prints `runhub: <runId>` then the report. Exit 0 on pass / changed-untested / no-changes. Exit 1 on fail. Exit 3 means still running. `--detach` returns after the id only; then `runhub wait <runId>`.
+Waits and prints `runhub: <runId>` then the report. Exit 0 on pass / changed-untested / no-changes; 1 on fail; 3 still running. `--detach` returns after the id only — then `runhub wait <runId>` or `runhub inspect <runId> -f`.
 
-Read it again later with `runhub report <runId>`, or peek at live logs with `runhub inspect <runId> -f`.
-
-Optional: `--review claude`, then `runhub merge <runId>` only when you mean it. Cursor MCP tools match the CLI except there is no `merge` tool. See [CONFIG.md](CONFIG.md).
-
-## Stuck?
-
-| Symptom | Likely fix |
-| --- | --- |
-| `not in projects.toml: …` | `runhub add <path>` |
-| `missing git identity …` | `runhub init --identity` or set the env vars |
-| `still running` (exit 3) | Wait longer or `runhub inspect <id> -f` |
-| `changed, untested` | Add a `test` key or install the test binary |
+Stuck? `not in projects.toml` → `runhub add`. Missing identity → `runhub init --identity`. More detail: [CONFIG.md](CONFIG.md).
