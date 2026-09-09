@@ -9,7 +9,8 @@
   },
   "type": "module",
   "bin": {
-    "runhub": "./dist/cli.js"
+    "runhub": "./dist/cli.js",
+    "runhub-mcp": "./dist/mcp.js"
   },
   "files": [
     "dist",
@@ -21,7 +22,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsc && chmod +x dist/cli.js dist/mcp.js",
     "prepack": "npm run build",
     "test": "rm -rf dist-test && tsc && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
     "contract": "rm -rf dist-test && tsc && tsc -p tsconfig.test.json && node dist-test/test/contract.js",

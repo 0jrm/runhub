@@ -62,12 +62,49 @@ function linkIgnoredDeps(repo: string, tree: string): void {
   }
 }
 
+export function gitIdentityFromEnv(): { name: string; email: string } {
+  const name = process.env.RUNHUB_GIT_NAME?.trim();
+  const email = process.env.RUNHUB_GIT_EMAIL?.trim();
+  return {
+    name: name && name.length > 0 ? name : "runhub",
+    email: email && email.length > 0 ? email : "runhub@localhost",
+  };
+}
+
+function gitConfigValue(cwd: string, key: string): string | undefined {
+  const r = git(cwd, ["config", "--get", key]);
+  if (r.status !== 0) return undefined;
+  const value = r.stdout.trim();
+  return value.length > 0 ? value : undefined;
+}
+
+/** Set local user.name / user.email when git cannot already resolve them. Does not write --global. */
+export function ensureLocalGitIdentity(cwd: string): void {
+  const haveName = gitConfigValue(cwd, "user.name");
+  const haveEmail = gitConfigValue(cwd, "user.email");
+  if (haveName !== undefined && haveEmail !== undefined) return;
+  const id = gitIdentityFromEnv();
+  if (haveName === undefined) {
+    const r = git(cwd, ["config", "user.name", id.name]);
+    if (r.status !== 0) {
+      throw new Error(`git config user.name failed: ${r.stderr.trim() || r.stdout.trim()}`);
+    }
+  }
+  if (haveEmail === undefined) {
+    const r = git(cwd, ["config", "user.email", id.email]);
+    if (r.status !== 0) {
+      throw new Error(`git config user.email failed: ${r.stderr.trim() || r.stdout.trim()}`);
+    }
+  }
+}
+
 export function addDetachedWorktree(opts: { repo: string; tree: string; sha: string }): void {
   const r = git(opts.repo, ["worktree", "add", "--detach", opts.tree, opts.sha]);
   if (r.status !== 0) {
     throw new Error(`git worktree add failed: ${r.stderr.trim() || r.stdout.trim()}`);
   }
   linkIgnoredDeps(opts.repo, opts.tree);
+  ensureLocalGitIdentity(opts.tree);
 }
 
 export function removeWorktree(opts: { repo: string; tree: string }): void {
@@ -82,6 +119,7 @@ export function createRunWorktree(opts: { repo: string; tree: string; branch: st
     throw new Error(`git worktree add failed: ${r.stderr.trim() || r.stdout.trim()}`);
   }
   linkIgnoredDeps(opts.repo, opts.tree);
+  ensureLocalGitIdentity(opts.tree);
   return { repo: opts.repo, tree: opts.tree, branch: opts.branch, base };
 }
 
@@ -97,6 +135,7 @@ export function commitMessage(prompt: string): string {
 }
 
 export function landDirtyWork(wt: RunWorktree, prompt: string): LandResult {
+  ensureLocalGitIdentity(wt.tree);
   const porcelain = gitText(wt.tree, ["status", "--porcelain"]);
   if (porcelain.trim().length === 0) {
     return { didCommit: false, sha: revParseHead(wt.tree), porcelain };

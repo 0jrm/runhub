@@ -36,6 +36,7 @@ import {
   specPath,
   reportPath,
   reviewPath,
+  persistSession,
   runDir,
   ensureRunDir,
   worktreePath,
@@ -209,6 +210,7 @@ export function prepareRun(opts: PipelineOpts): RunId {
       message: resolved.projectPreambleError,
     });
   }
+  persistSession(runId, {});
   return runId;
 }
 
@@ -403,6 +405,10 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
     const branch = branchName(runId);
     const wt: RunWorktree = createRunWorktree({ repo: created.cwd, tree, branch });
     emit(runId, { kind: "base_recorded", ts: nowIso(), runId, baseSha: wt.base, branch });
+    persistSession(runId, {
+      worktree: tree,
+      links: { worktree: tree, branch },
+    });
 
     if (ac.signal.aborted) return finish();
 
@@ -437,6 +443,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         signal: ac.signal,
         onStart: (pgid) => {
           emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
+          persistSession(runId, { agentPgid: pgid, links: { agentPgid: String(pgid) } });
         },
       });
       agentCode = result.code ?? 1;
@@ -561,6 +568,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         appendStdout: true,
         onStart: (pgid) => {
           emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
+          persistSession(runId, { agentPgid: pgid, links: { agentPgid: String(pgid) } });
         },
       });
       agentCode = retry.code ?? 1;
@@ -633,6 +641,9 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
           stderrPath: join(runDir(runId), "review.stderr"),
           timeoutMs,
           signal: ac.signal,
+          onStart: (pgid) => {
+            persistSession(runId, { reviewPgid: pgid, links: { reviewPgid: String(pgid) } });
+          },
         });
         emitUsages(runId, "review", reviewPath(runId), 0);
         const raw = existsSync(reviewPath(runId)) ? readFileSync(reviewPath(runId), "utf8") : "";

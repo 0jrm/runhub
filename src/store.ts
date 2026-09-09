@@ -65,6 +65,102 @@ export function reportPath(runId: RunId): string {
   return join(runDir(runId), "report.md");
 }
 
+export function pipelineLogPath(runId: RunId): string {
+  return join(runDir(runId), "pipeline.log");
+}
+
+export function sessionPath(runId: RunId): string {
+  return join(runDir(runId), "session.json");
+}
+
+export type RunSession = {
+  runId: string;
+  worktree: string;
+  runDir: string;
+  pipelinePid?: number;
+  agentPgid?: number;
+  reviewPgid?: number;
+  logs: {
+    pipeline: string;
+    agentStdout: string;
+    agentStderr: string;
+    review: string;
+    report: string;
+  };
+  links: Record<string, string>;
+};
+
+export function emptySession(runId: RunId): RunSession {
+  const dir = runDir(runId);
+  const tree = worktreePath(runId);
+  const logs = {
+    pipeline: pipelineLogPath(runId),
+    agentStdout: agentStdoutPath(runId),
+    agentStderr: agentStderrPath(runId),
+    review: reviewPath(runId),
+    report: reportPath(runId),
+  };
+  return {
+    runId,
+    worktree: tree,
+    runDir: dir,
+    logs,
+    links: {
+      runDir: dir,
+      worktree: tree,
+      pipeline: logs.pipeline,
+      agentStdout: logs.agentStdout,
+      agentStderr: logs.agentStderr,
+      review: logs.review,
+      report: logs.report,
+    },
+  };
+}
+
+export function readSession(runId: RunId): RunSession | undefined {
+  const path = sessionPath(runId);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    const rec = parsed as Record<string, unknown>;
+    const base = emptySession(runId);
+    if (typeof rec.worktree === "string") base.worktree = rec.worktree;
+    if (typeof rec.runDir === "string") base.runDir = rec.runDir;
+    if (typeof rec.pipelinePid === "number") base.pipelinePid = rec.pipelinePid;
+    if (typeof rec.agentPgid === "number") base.agentPgid = rec.agentPgid;
+    if (typeof rec.reviewPgid === "number") base.reviewPgid = rec.reviewPgid;
+    if (typeof rec.logs === "object" && rec.logs !== null && !Array.isArray(rec.logs)) {
+      const logs = rec.logs as Record<string, unknown>;
+      for (const key of ["pipeline", "agentStdout", "agentStderr", "review", "report"] as const) {
+        if (typeof logs[key] === "string") base.logs[key] = logs[key];
+      }
+    }
+    if (typeof rec.links === "object" && rec.links !== null && !Array.isArray(rec.links)) {
+      const links = rec.links as Record<string, unknown>;
+      for (const [k, v] of Object.entries(links)) {
+        if (typeof v === "string" && v.length > 0) base.links[k] = v;
+      }
+    }
+    return base;
+  } catch {
+    return undefined;
+  }
+}
+
+export function persistSession(runId: RunId, patch: Partial<RunSession> & { links?: Record<string, string> }): RunSession {
+  const current = readSession(runId) ?? emptySession(runId);
+  const next: RunSession = {
+    ...current,
+    ...patch,
+    logs: { ...current.logs, ...(patch.logs ?? {}) },
+    links: { ...current.links, ...(patch.links ?? {}) },
+  };
+  if (patch.pipelinePid === undefined && current.pipelinePid !== undefined) next.pipelinePid = current.pipelinePid;
+  writeFileSync(sessionPath(runId), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  return next;
+}
+
 export function reviewPath(runId: RunId): string {
   return join(runDir(runId), "review.md");
 }
@@ -185,8 +281,38 @@ export function latestRunId(): RunId | undefined {
   return last?.runId;
 }
 
+export function latestRunningRunId(now = Date.now()): RunId | undefined {
+  const root = runsRoot();
+  mkdirSync(root, { recursive: true });
+  const running: { runId: RunId; createdAt: string }[] = [];
+  for (const name of readdirSync(root)) {
+    const dir = join(root, name);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      const id = toRunId(name);
+      const view = loadView(id);
+      if (pidAlive(view.pipelinePid) !== true) continue;
+      running.push({ runId: id, createdAt: view.createdAt });
+    } catch {
+      continue;
+    }
+  }
+  running.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return running[running.length - 1]?.runId;
+}
+
 export function resolveRunId(arg: string | undefined): RunId {
   if (arg !== undefined && arg.length > 0) return toRunId(arg);
+  const latest = latestRunId();
+  if (!latest) throw new Error("no runs stored");
+  return latest;
+}
+
+/** Default inspect target: newest running run, else most recent run. */
+export function resolveInspectRunId(arg: string | undefined, now = Date.now()): RunId {
+  if (arg !== undefined && arg.length > 0) return toRunId(arg);
+  const running = latestRunningRunId(now);
+  if (running !== undefined) return running;
   const latest = latestRunId();
   if (!latest) throw new Error("no runs stored");
   return latest;
