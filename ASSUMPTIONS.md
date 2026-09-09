@@ -14,3 +14,7 @@ ASSUMED: GROKBOT keeps `--detach` then `wait --timeout 90s` because a phone bot 
 ASSUMED: this worktree does not push or open a PR; the runhub pipeline owns remotes.
 ASSUMED: Claude `--model` aliases map to Claude Code short ids (`fable`, not `claude-fable-5-1`) because `CLAUDE_MODEL` is already the short id `sonnet`.
 ASSUMED: unknown Claude models are checked against a static alias table only; Claude Code is not probed because `claude --help` is not a cheap stable model catalog.
+ASSUMED: agent output in report.md is quoted inside a fenced block with `| ` line prefixes so downstream consumers (Grok, Claude door, MCP callers) treat it as data, not instructions.
+ASSUMED: push and PR creation are gated on having at least one commit ahead of the base; a no-changes run leaves no stray remote branch.
+ASSUMED: `--model` aliases normalize through a static table before spawn: `fable 5.1`, `fable-5.1`, `claude-fable-5-1` all resolve to `fable`. Unknown ids exit with a suggestion, never a generic picker.
+ASSUMED: the Claude phone door (`~/runhub-door/`) is a `claude remote-control` session with an allow-list of six MCP tools and a deny-list of everything else (Bash, Read, Monitor, etc.). The URL changes on each restart (upstream limitation, no `--resume` flag yet).

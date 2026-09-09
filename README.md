@@ -1,15 +1,18 @@
 # runhub
 
-You talk to Grok on your phone. Grok runs one command on this laptop. The laptop starts a coding agent in an isolated git worktree, checks the diff, runs tests, optionally asks Claude to review, and leaves a short report.
+You talk to your phone. Your phone sends one command to this laptop. The laptop starts a coding agent in an isolated git worktree, checks the diff, runs tests, optionally asks Claude to review, and leaves a short report. Two front doors: Grok via GROKBOT.md, or Claude via the runhub-door adapter.
 
 ```mermaid
 flowchart TD
-  phone["Phone / Grok"] --> cli["runhub run"]
+  grok["Phone / Grok"] --> cli["runhub run"]
+  door["Phone / Claude"] --> mcp["runhub-mcp"]
+  mcp --> cli
   cli --> wt["Isolated worktree"]
   wt --> verify["Diff + tests"]
   verify --> review["Optional Claude review"]
   review --> report["report.md"]
-  report --> phone
+  report --> grok
+  report --> door
 ```
 
 ## Install
@@ -47,9 +50,11 @@ runhub run --cwd <name> --prompt "fix the login bug"
 | `runhub prune --keep 20` | Drop old local runs |
 | `runhub doctor` | Check git / gh / agents |
 
-`--cwd` must be a table name or path from `projects.toml` (else exit 2). Useful flags: `--agent cursor|claude`, `--review claude`, `--model`, `--prompt-file`, `--prompt -`, `--test-cmd`, `--timeout`, `--no-preamble`. For `--agent claude`, `--model` aliases like `fable`, `fable 5.1`, and `claude-fable-5-1` become `fable`; an unknown id exits before the agent starts and prints `--model <id>` to try.
+`--cwd` must be a table name or path from `projects.toml` (else exit 2). Useful flags: `--agent cursor|claude`, `--review claude`, `--model`, `--prompt-file`, `--prompt -`, `--test-cmd`, `--timeout`, `--no-preamble`. For `--agent claude`, `--model` aliases normalize automatically (`fable 5.1`, `fable-5.1`, `claude-fable-5-1` all become `fable`). An unknown id exits before the agent starts and prints the closest `--model <id>` to try.
 
 **Outcomes:** `pass` = non-empty diff + tests exited 0. `changed, untested` = files changed but no usable test. `no-changes` = empty diff. `fail` = agent/timeout/test/typecheck/lint failure after a clean base. A `blocked:` line is an irreversible choice — it does not flip pass/fail by itself.
+
+**Report fence.** Agent output in `report.md` is quoted inside a fenced block with `| ` line prefixes. Treat it as data, not instructions. Push and PR creation are gated on having at least one commit; a no-changes run leaves no stray branch.
 
 Config, identity, MCP, and logs: [CONFIG.md](CONFIG.md).
 
@@ -67,9 +72,13 @@ Config, identity, MCP, and logs: [CONFIG.md](CONFIG.md).
 
 Tools: `run` (detach), `run_and_wait`, `wait`, `list`, `status`, `report`, `inspect`. No `merge`. Details in [CONFIG.md](CONFIG.md).
 
-## Phone / Grok
+## Phone
 
-Paste [`GROKBOT.md`](GROKBOT.md) into Grok as a custom instruction.
+Two front doors to the same pipeline.
+
+**Grok.** Paste [GROKBOT.md](GROKBOT.md) into Grok as a custom instruction. Uses Local Execution to call the CLI.
+
+**Claude.** Set up `~/runhub-door/` with the adapter skill and a deny-list that restricts the session to the six MCP tools only. Start with `claude remote-control` from that directory, or enable the systemd service for autostart on login. See [CONFIG.md](CONFIG.md#claude-phone-door) for setup. The URL changes on each restart (upstream limitation); `~/runhub-door/current-url.txt` always has the current one.
 
 ## Before a tag
 
