@@ -238,7 +238,15 @@ function ghUsable(cwd: string): boolean {
   return gh(["auth", "status"], cwd).status === 0;
 }
 
-function maybeOpenPr(runId: RunId, cwd: string, branch: string, prompt: string, remote: string | undefined): void {
+function maybeOpenPr(
+  runId: RunId,
+  cwd: string,
+  branch: string,
+  prompt: string,
+  remote: string | undefined,
+  hasCommit: boolean,
+): void {
+  if (!hasCommit) return;
   if (remote === undefined || remote.length === 0) return;
   if (remoteUrl(cwd, remote) === undefined) {
     emit(runId, {
@@ -380,7 +388,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
       }),
     });
     if (view.branch !== undefined) {
-      maybeOpenPr(runId, view.cwd, view.branch, view.prompt, view.remote);
+      maybeOpenPr(runId, view.cwd, view.branch, view.prompt, view.remote, view.commitSha !== undefined);
     }
     maybePostReviewComment(runId);
     view = loadView(runId);
