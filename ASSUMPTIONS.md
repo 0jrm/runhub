@@ -12,3 +12,5 @@ ASSUMED: CLI `run` waits by default; `--detach` is the old async print-id-and-re
 ASSUMED: MCP `run` stays fire-and-forget like `--detach`; `run_and_wait` waits; still no merge tool.
 ASSUMED: GROKBOT keeps `--detach` then `wait --timeout 90s` because a phone bot should not block for the full agent timeout.
 ASSUMED: this worktree does not push or open a PR; the runhub pipeline owns remotes.
+ASSUMED: Claude `--model` aliases map to Claude Code short ids (`fable`, not `claude-fable-5-1`) because `CLAUDE_MODEL` is already the short id `sonnet`.
+ASSUMED: unknown Claude models are checked against a static alias table only; Claude Code is not probed because `claude --help` is not a cheap stable model catalog.

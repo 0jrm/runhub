@@ -47,7 +47,7 @@ runhub run --cwd <name> --prompt "fix the login bug"
 | `runhub prune --keep 20` | Drop old local runs |
 | `runhub doctor` | Check git / gh / agents |
 
-`--cwd` must be a table name or path from `projects.toml` (else exit 2). Useful flags: `--agent cursor|claude`, `--review claude`, `--model`, `--prompt-file`, `--prompt -`, `--test-cmd`, `--timeout`, `--no-preamble`.
+`--cwd` must be a table name or path from `projects.toml` (else exit 2). Useful flags: `--agent cursor|claude`, `--review claude`, `--model`, `--prompt-file`, `--prompt -`, `--test-cmd`, `--timeout`, `--no-preamble`. For `--agent claude`, `--model` aliases like `fable`, `fable 5.1`, and `claude-fable-5-1` become `fable`; an unknown id exits before the agent starts and prints `--model <id>` to try.
 
 **Outcomes:** `pass` = non-empty diff + tests exited 0. `changed, untested` = files changed but no usable test. `no-changes` = empty diff. `fail` = agent/timeout/test/typecheck/lint failure after a clean base. A `blocked:` line is an irreversible choice — it does not flip pass/fail by itself.
 

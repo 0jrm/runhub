@@ -3,7 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { findOnPath } from "./adapters.js";
+import { CLAUDE_MODEL } from "./domain.js";
 import { identityTomlPath } from "./git.js";
+import { claudeModelResolves } from "./model.js";
 import { addProjectPath, runhubConfigDir } from "./projects.js";
 
 type CmdResult = { code: number; stdout: string; stderr: string };
@@ -53,6 +55,8 @@ export function doctorRunhub(): CmdResult {
       lines.push(`${name}: missing`);
     }
   }
+  const modelOk = claudeModelResolves(CLAUDE_MODEL);
+  lines.push(`claude model ${CLAUDE_MODEL}: ${modelOk ? "ok" : "unrecognized"}`);
   return { code: gitOk ? 0 : 1, stdout: `${lines.join("\n")}\n`, stderr: "" };
 }
 

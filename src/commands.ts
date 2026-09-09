@@ -5,13 +5,13 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   DEFAULT_TIMEOUT_MS,
   DEFAULT_WAIT_MS,
-  defaultModel,
   nowIso,
   outcome,
   toRunId,
   type AgentKind,
   type ReviewKind,
 } from "./domain.js";
+import { resolveAgentModel } from "./model.js";
 import { loadProjects, resolveRunCwd } from "./projects.js";
 import {
   appendEvent,
@@ -86,6 +86,7 @@ export function launchRun(args: RunArgs): CmdResult {
   const agent = parseAgent(args.agent);
   const review = parseReview(args.review);
   const timeoutMs = parseTimeout(args.timeout);
+  const model = resolveAgentModel(agent, args.model);
   const resolved = resolveRunCwd(args.cwd, loadProjects());
   assertGitCwd(resolved.cwd);
   const runId = prepareRun({
@@ -99,7 +100,7 @@ export function launchRun(args: RunArgs): CmdResult {
     preambleFile: resolved.preamble,
     noPreamble: args.noPreamble === true,
     agent,
-    model: args.model ?? defaultModel(agent),
+    model,
     review,
   });
   const logFd = openSync(join(runDir(runId), "pipeline.log"), "a");
