@@ -14,6 +14,14 @@ npm run build
 npm install -g .
 ```
 
+## First run
+
+1. `runhub init --yes` — creates `~/.config/runhub/` and copies `identity.toml.example` to `identity.toml` if that file is missing. Edit `name` and `email`. `runhub doctor` checks git, gh, cursor-agent, and claude.
+2. `runhub add /path/to/repo` — appends that git repo to `projects.toml`.
+3. `runhub run --cwd <name-or-path> --prompt "fix the login bug"` — waits for the report.
+
+`--detach` is the old async shape: it prints `runhub: <runId>` and returns at once. `runhub wait <runId>` still works. More detail: [QUICKSTART.md](QUICKSTART.md) and [CONFIG.md](CONFIG.md).
+
 ## Everyday use
 
 Point at a git repo that is already in `~/.config/runhub/projects.toml`. `--cwd` is a filesystem path or a table name from that file. `runhub run` refuses any other path. Exit 2, message `not in projects.toml: <resolved path>`. Keys in that file are `path`, `test`, `typecheck`, `lint`, `remote`, and `preamble`. `preamble` is a path to a file that replaces the built-in unattended instructions. A `test` key wins over detection. `--test-cmd` wins over both.
@@ -22,13 +30,9 @@ Point at a git repo that is already in `~/.config/runhub/projects.toml`. `--cwd`
 runhub run --cwd /home/jrm22n/hycom --prompt "fix the login bug"
 ```
 
-That prints `runhub: <runId>` and returns in under two seconds. The pipeline keeps going in the background. Wait for it:
+That waits for the report (id on the first line, then `report.md`). `--detach` prints `runhub: <runId>` and returns in under two seconds while the pipeline keeps going.
 
-```bash
-runhub wait <runId>
-```
-
-`wait` prints the report when the run finishes. Exit 0 on pass, changed, untested, or no-changes. Exit 1 on fail. If the timeout hits first, it prints `still running: <runId>` and exits 3. The run keeps going. Default wait timeout is 10m.
+`wait` prints the report when the run finishes. Exit 0 on pass, changed, untested, or no-changes. Exit 1 on fail. If the timeout hits first, it prints `still running: <runId>` and exits 3. The run keeps going. Default wait timeout is 10m. A waiting `run` waits at least as long as the agent `--timeout` plus one minute.
 
 That starts Cursor Agent with Grok 4.6 Medium in a new worktree on `runhub/<runId>`. The prompt goes on stdin, not argv. `--force` (Cursor) and `--dangerously-skip-permissions` (Claude) are on by default.
 
@@ -85,23 +89,23 @@ runhub inspect <runId> --links-only
 
 `session.json` is written when the run is created and updated with the pipeline pid, agent pgid, and worktree path. Cursor or Claude transcript URLs are stored only if they already appear in those files. This command does not scrape HTML.
 
-When runhub creates a run worktree it does not write the project's shared `.git/config` or `--global`. Commit author comes from `RUNHUB_GIT_NAME` / `RUNHUB_GIT_EMAIL`, else `~/.config/runhub/identity.toml` (`name` and `email`). Copy `identity.toml.example`, `chmod 600` the file, and keep only author metadata there. No PATs, SSH keys, or other secrets. If both env and file are missing, `runhub run` exits before the agent starts and the error names that path. The worktree gets `config.worktree` plus `GIT_AUTHOR_*` / `GIT_COMMITTER_*` on the commit and the agent child.
+When runhub creates a run worktree it does not write the project's shared `.git/config` or `--global`. Commit author comes from `RUNHUB_GIT_NAME` / `RUNHUB_GIT_EMAIL`, else `~/.config/runhub/identity.toml` (`name` and `email`). `runhub init` copies `identity.toml.example` if the file is missing. Keep only author metadata there. No PATs, SSH keys, or other secrets. If both env and file are missing, `runhub run` exits before the agent starts, names that path, and suggests `runhub init --identity`. The worktree gets `config.worktree` plus `GIT_AUTHOR_*` / `GIT_COMMITTER_*` on the commit and the agent child.
 
 Logs live in `~/.local/share/runhub/runs/`. Each run directory is mode 0700. `prompt.txt`, `spec.txt`, `review-prompt.txt`, and `report.md` are plaintext. Anyone who can read that tree can read the prompts. Finished runs prune older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
 
 Run `npm run contract` before every tag and after upgrading `cursor-agent`, `claude`, or `gh`. That hits the real binaries, not the fake ones in `npm test`.
 
-Optional flags: `--timeout 30m` (already the default), `--test-cmd "npm test"`, `--agent`, `--model`, `--review`, `--prompt-file`, `--no-preamble`. `wait` also takes `--timeout`.
+Optional flags: `--timeout 30m` (already the default), `--test-cmd "npm test"`, `--agent`, `--model`, `--review`, `--prompt-file`, `--no-preamble`, `--detach`. `wait` also takes `--timeout`.
 
 Paste `GROKBOT.md` into Grok as a custom instruction.
 
 ## Cursor MCP
 
-`runhub-mcp` is a local stdio MCP server. It calls the same code as `runhub run`, `wait`, `list`, `status`, `report`, and `inspect`. `--cwd` still has to be a name or path from `projects.toml`. There is no `merge` tool.
+`runhub-mcp` is a local stdio MCP server. It calls the same code as `runhub run --detach`, waiting `runhub run` (`run_and_wait`), `wait`, `list`, `status`, `report`, and `inspect`. `--cwd` still has to be a name or path from `projects.toml`. There is no `merge` tool.
 
 Start it with `runhub-mcp` after a global install, or `node dist/mcp.js` from this repo.
 
-Tool names: `run`, `wait`, `list`, `status`, `report`, `inspect`.
+Tool names: `run`, `run_and_wait`, `wait`, `list`, `status`, `report`, `inspect`.
 
 Cursor reads `~/.cursor/mcp.json`. One-line shape: `{"mcpServers":{"runhub":{"command":"runhub-mcp"}}}`. Expanded:
 

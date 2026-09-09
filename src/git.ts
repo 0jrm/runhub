@@ -130,7 +130,9 @@ export function resolveGitIdentity(): GitIdentity {
   const name = nonemptyEnv("RUNHUB_GIT_NAME") ?? file.name;
   const email = nonemptyEnv("RUNHUB_GIT_EMAIL") ?? file.email;
   if (name !== undefined && email !== undefined) return { name, email };
-  throw new Error(`missing git identity (name and email): ${identityTomlPath()}`);
+  throw new Error(
+    `missing git identity (name and email): ${identityTomlPath()}\nrun: runhub init --identity`,
+  );
 }
 
 export function gitIdentityEnv(id: GitIdentity = resolveGitIdentity()): NodeJS.ProcessEnv {

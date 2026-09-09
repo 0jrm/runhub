@@ -9,17 +9,17 @@ import { callTool, handleRpc, listTools, TOOL_NAMES } from "../src/mcp.js";
 
 const mcp = join(dirname(fileURLToPath(import.meta.url)), "../../dist/mcp.js");
 
-test("MCP tool list is run wait list status report inspect and omits merge", async () => {
+test("MCP tool list is run run_and_wait wait list status report inspect and omits merge", async () => {
   assert.deepEqual(
     listTools().map((t) => t.name),
-    ["run", "wait", "list", "status", "report", "inspect"],
+    ["run", "run_and_wait", "wait", "list", "status", "report", "inspect"],
   );
-  assert.deepEqual([...TOOL_NAMES], ["run", "wait", "list", "status", "report", "inspect"]);
+  assert.deepEqual([...TOOL_NAMES], ["run", "run_and_wait", "wait", "list", "status", "report", "inspect"]);
 
   const listed = await handleRpc({ jsonrpc: "2.0", id: 1, method: "tools/list" });
   assert.ok(listed?.result);
   const tools = (listed.result as { tools: { name: string }[] }).tools.map((t) => t.name);
-  assert.deepEqual(tools, ["run", "wait", "list", "status", "report", "inspect"]);
+  assert.deepEqual(tools, ["run", "run_and_wait", "wait", "list", "status", "report", "inspect"]);
   assert.ok(!tools.includes("merge"));
 
   const merge = await callTool("merge", {});
@@ -69,5 +69,5 @@ test("stdio MCP initialize then tools/list", () => {
     .map((l) => JSON.parse(l) as { id?: number; result?: { tools?: { name: string }[] } });
   assert.equal(lines.length, 2);
   const names = lines[1]?.result?.tools?.map((t) => t.name) ?? [];
-  assert.deepEqual(names, ["run", "wait", "list", "status", "report", "inspect"]);
+  assert.deepEqual(names, ["run", "run_and_wait", "wait", "list", "status", "report", "inspect"]);
 });

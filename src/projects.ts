@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { ParseError } from "./domain.js";
 
 export class NotInProjectsError extends Error {
@@ -22,8 +22,45 @@ export type Project = {
   preamble?: string;
 };
 
+export function runhubConfigDir(): string {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "runhub");
+}
+
 export function projectsTomlPath(): string {
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "runhub", "projects.toml");
+  return join(runhubConfigDir(), "projects.toml");
+}
+
+export function projectTableName(projectPath: string): string {
+  const raw = basename(resolve(projectPath));
+  const name = raw.replace(/[^A-Za-z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
+  if (name.length === 0) throw new Error(`cannot derive a projects.toml table name from ${projectPath}`);
+  return name;
+}
+
+function quoteTomlString(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+/** Append a git repo path to projects.toml. Idempotent if the same path is already listed. */
+export function addProjectPath(raw: string): { name: string; path: string; added: boolean } {
+  const cwd = resolve(raw);
+  const name = projectTableName(cwd);
+  const projects = loadProjects();
+  const samePath = projects.find((p) => pathsEqual(cwd, resolve(p.path)));
+  if (samePath !== undefined) {
+    return { name: samePath.name, path: resolve(samePath.path), added: false };
+  }
+  const sameName = projects.find((p) => p.name === name);
+  if (sameName !== undefined) {
+    throw new Error(`[${name}] already exists at ${sameName.path}`);
+  }
+  mkdirSync(runhubConfigDir(), { recursive: true, mode: 0o700 });
+  const file = projectsTomlPath();
+  const block = `[${name}]\npath = ${quoteTomlString(cwd)}\n`;
+  const prev = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const next = prev.length === 0 ? block : prev.endsWith("\n") ? `${prev}${block}` : `${prev}\n${block}`;
+  writeFileSync(file, next);
+  return { name, path: cwd, added: true };
 }
 
 export function loadProjects(): Project[] {

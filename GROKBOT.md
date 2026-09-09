@@ -15,9 +15,9 @@ Flags from the sentence:
 - a named model → `--model <id>`. Otherwise omit `--model`.
 - the rest of the sentence is `--prompt`.
 
-Start the run:
+Start the run. On the phone use `--detach` so the bot is not stuck for the full agent timeout, then wait:
 
-`runhub run --cwd <name> --agent <cursor|claude> --review <none|claude> [--model <id>] --prompt "<spec>"`
+`runhub run --detach --cwd <name> --agent <cursor|claude> --review <none|claude> [--model <id>] --prompt "<spec>"`
 
 If the spec is more than one line, do not put it in `--prompt`. Write it to a temp file first, then pass that file:
 
@@ -25,7 +25,7 @@ If the spec is more than one line, do not put it in `--prompt`. Write it to a te
 cat > /tmp/runhub-spec.md <<'SPEC'
 <spec>
 SPEC
-runhub run --cwd <name> --agent <cursor|claude> --review <none|claude> [--model <id>] --prompt-file /tmp/runhub-spec.md
+runhub run --detach --cwd <name> --agent <cursor|claude> --review <none|claude> [--model <id>] --prompt-file /tmp/runhub-spec.md
 ```
 
 Stdout is `runhub: <runId>`. Then wait:
@@ -40,4 +40,4 @@ If they say "merge it", run `runhub merge <runId>` with the most recent runId fo
 
 The stored report is `~/.local/share/runhub/runs/<runId>/report.md`. If they want the long log, give that path as a `full:` markdown hyperlink. Stop.
 
-On the laptop, Cursor can call the same run/wait/list/status/report/inspect commands through `runhub-mcp` (see README).
+On the laptop, Cursor can call the same run/run_and_wait/wait/list/status/report/inspect commands through `runhub-mcp` (see README). There is no merge tool.

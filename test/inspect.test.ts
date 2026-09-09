@@ -213,7 +213,7 @@ test("prepareRun writes session.json and CLI inspect reads it", () => {
     };
     const r = spawnSync(
       process.execPath,
-      [cli, "run", "--cwd", work, "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
+      [cli, "run", "--detach", "--cwd", work, "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
       { encoding: "utf8", env },
     );
     assert.equal(r.status, 0, r.stderr);

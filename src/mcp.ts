@@ -5,10 +5,10 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseTailKind } from "./inspect.js";
 import { NotInProjectsError } from "./projects.js";
-import { listRun, reportRun, startRun, statusRun, waitRun, inspectRun, type CmdResult } from "./commands.js";
+import { listRun, reportRun, launchRun, startRun, statusRun, waitRun, inspectRun, type CmdResult } from "./commands.js";
 
 export const MCP_PROTOCOL = "2024-11-05";
-export const TOOL_NAMES = ["run", "wait", "list", "status", "report", "inspect"] as const;
+export const TOOL_NAMES = ["run", "run_and_wait", "wait", "list", "status", "report", "inspect"] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -38,7 +38,28 @@ const TOOLS: {
   {
     name: "run",
     description:
-      "Start a runhub pipeline in a projects.toml cwd. Same as `runhub run`. Returns `runhub: <runId>` and returns immediately.",
+      "Start a runhub pipeline in a projects.toml cwd. Same as `runhub run --detach`. Returns `runhub: <runId>` immediately. Does not merge.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["cwd"],
+      properties: {
+        cwd: { type: "string", description: "Project table name or allowed filesystem path from projects.toml" },
+        prompt: { type: "string", description: "Spec text. Required unless prompt_file is set. Not stdin." },
+        prompt_file: { type: "string", description: "Read the spec from this file instead of prompt" },
+        agent: { type: "string", description: "cursor or claude" },
+        model: { type: "string" },
+        review: { type: "string", description: "claude or none" },
+        timeout: { type: "string", description: "Agent timeout, e.g. 30m" },
+        test_cmd: { type: "string" },
+        no_preamble: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "run_and_wait",
+    description:
+      "Start a runhub pipeline and wait for the report. Same as `runhub run` without --detach. Does not merge.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -169,22 +190,23 @@ function failContent(err: unknown): ToolContent {
 
 export async function callTool(name: string, rawArgs: unknown): Promise<ToolContent> {
   try {
-    if (name === "run") {
+    if (name === "run" || name === "run_and_wait") {
       const args = asObject(rawArgs);
       const cwd = str(args, "cwd");
       if (cwd === undefined) throw new Error("run requires cwd");
-      return toToolContent(
-        startRun({
-          cwd,
-          prompt: promptFromArgs(args),
-          timeout: str(args, "timeout"),
-          testCmd: str(args, "test_cmd"),
-          agent: str(args, "agent"),
-          model: str(args, "model"),
-          review: str(args, "review"),
-          noPreamble: bool(args, "no_preamble") === true,
-        }),
-      );
+      const runArgs = {
+        cwd,
+        prompt: promptFromArgs(args),
+        timeout: str(args, "timeout"),
+        testCmd: str(args, "test_cmd"),
+        agent: str(args, "agent"),
+        model: str(args, "model"),
+        review: str(args, "review"),
+        noPreamble: bool(args, "no_preamble") === true,
+        detach: name === "run",
+      };
+      if (name === "run") return toToolContent(launchRun(runArgs));
+      return toToolContent(await startRun(runArgs));
     }
     if (name === "wait") {
       const args = asObject(rawArgs);
