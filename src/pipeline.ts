@@ -22,7 +22,18 @@ import {
 } from "./domain.js";
 import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
 import { runVerify, annotateBaseline } from "./verify.js";
-import { commitMessage, createRunWorktree, diffText, logOnelineText, landDirtyWork, pushBranch, remoteUrl, type RunWorktree } from "./git.js";
+import {
+  commitMessage,
+  createRunWorktree,
+  diffText,
+  gitIdentityEnv,
+  logOnelineText,
+  landDirtyWork,
+  pushBranch,
+  remoteUrl,
+  resolveGitIdentity,
+  type RunWorktree,
+} from "./git.js";
 import {
   agentStderrPath,
   agentStdoutPath,
@@ -37,6 +48,7 @@ import {
   reportPath,
   reviewPath,
   persistSession,
+  emptySession,
   runDir,
   ensureRunDir,
   worktreePath,
@@ -172,6 +184,7 @@ function emitUsages(runId: RunId, stepId: "agent" | "review", stdoutPath: string
 }
 
 export function prepareRun(opts: PipelineOpts): RunId {
+  resolveGitIdentity();
   const runId = newRunId();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const agent = opts.agent ?? "cursor";
@@ -210,7 +223,7 @@ export function prepareRun(opts: PipelineOpts): RunId {
       message: resolved.projectPreambleError,
     });
   }
-  persistSession(runId, {});
+  persistSession(runId, emptySession(runId));
   return runId;
 }
 
@@ -334,6 +347,7 @@ function syncPrBody(runId: RunId): void {
 
 export async function executePipeline(runId: RunId, signal?: AbortSignal): Promise<PipelineResult> {
   const created = loadView(runId);
+  const agentEnv = { ...process.env, ...gitIdentityEnv() };
   const timeoutMs = created.timeoutMs;
   const agent = created.agent;
   const model = created.model;
@@ -441,6 +455,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         stderrPath: agentStderrPath(runId),
         timeoutMs,
         signal: ac.signal,
+        env: agentEnv,
         onStart: (pgid) => {
           emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
           persistSession(runId, { agentPgid: pgid, links: { agentPgid: String(pgid) } });
@@ -565,6 +580,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
         stderrPath: agentStderrPath(runId),
         timeoutMs,
         signal: ac.signal,
+        env: agentEnv,
         appendStdout: true,
         onStart: (pgid) => {
           emit(runId, { kind: "pgid_recorded", ts: nowIso(), runId, stepId: "agent", pgid });
@@ -641,6 +657,7 @@ export async function executePipeline(runId: RunId, signal?: AbortSignal): Promi
           stderrPath: join(runDir(runId), "review.stderr"),
           timeoutMs,
           signal: ac.signal,
+          env: agentEnv,
           onStart: (pgid) => {
             persistSession(runId, { reviewPgid: pgid, links: { reviewPgid: String(pgid) } });
           },

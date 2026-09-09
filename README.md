@@ -85,7 +85,7 @@ runhub inspect <runId> --links-only
 
 `session.json` is written when the run is created and updated with the pipeline pid, agent pgid, and worktree path. Cursor or Claude transcript URLs are stored only if they already appear in those files. This command does not scrape HTML.
 
-When runhub creates a run worktree it sets local `user.name` and `user.email` if git cannot already resolve them, so the post-agent commit does not fail with `Author identity unknown`. It does not write `--global`. Defaults are `runhub` / `runhub@localhost`. Override with `RUNHUB_GIT_NAME` and `RUNHUB_GIT_EMAIL` in the environment of the `runhub` process.
+When runhub creates a run worktree it does not write the project's shared `.git/config` or `--global`. Commit author comes from `RUNHUB_GIT_NAME` / `RUNHUB_GIT_EMAIL`, else `~/.config/runhub/identity.toml` (`name` and `email`). Copy `identity.toml.example`, `chmod 600` the file, and keep only author metadata there. No PATs, SSH keys, or other secrets. If both env and file are missing, `runhub run` exits before the agent starts and the error names that path. The worktree gets `config.worktree` plus `GIT_AUTHOR_*` / `GIT_COMMITTER_*` on the commit and the agent child.
 
 Logs live in `~/.local/share/runhub/runs/`. Each run directory is mode 0700. `prompt.txt`, `spec.txt`, `review-prompt.txt`, and `report.md` are plaintext. Anyone who can read that tree can read the prompts. Finished runs prune older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
 

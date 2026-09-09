@@ -69,6 +69,10 @@ export function pipelineLogPath(runId: RunId): string {
   return join(runDir(runId), "pipeline.log");
 }
 
+export function verifyOutPath(runId: RunId): string {
+  return join(runDir(runId), "verify.out");
+}
+
 export function sessionPath(runId: RunId): string {
   return join(runDir(runId), "session.json");
 }
@@ -86,6 +90,7 @@ export type RunSession = {
     agentStderr: string;
     review: string;
     report: string;
+    verify: string;
   };
   links: Record<string, string>;
 };
@@ -99,6 +104,7 @@ export function emptySession(runId: RunId): RunSession {
     agentStderr: agentStderrPath(runId),
     review: reviewPath(runId),
     report: reportPath(runId),
+    verify: verifyOutPath(runId),
   };
   return {
     runId,
@@ -113,6 +119,7 @@ export function emptySession(runId: RunId): RunSession {
       agentStderr: logs.agentStderr,
       review: logs.review,
       report: logs.report,
+      verify: logs.verify,
     },
   };
 }
@@ -132,7 +139,7 @@ export function readSession(runId: RunId): RunSession | undefined {
     if (typeof rec.reviewPgid === "number") base.reviewPgid = rec.reviewPgid;
     if (typeof rec.logs === "object" && rec.logs !== null && !Array.isArray(rec.logs)) {
       const logs = rec.logs as Record<string, unknown>;
-      for (const key of ["pipeline", "agentStdout", "agentStderr", "review", "report"] as const) {
+      for (const key of ["pipeline", "agentStdout", "agentStderr", "review", "report", "verify"] as const) {
         if (typeof logs[key] === "string") base.logs[key] = logs[key];
       }
     }
@@ -156,7 +163,6 @@ export function persistSession(runId: RunId, patch: Partial<RunSession> & { link
     logs: { ...current.logs, ...(patch.logs ?? {}) },
     links: { ...current.links, ...(patch.links ?? {}) },
   };
-  if (patch.pipelinePid === undefined && current.pipelinePid !== undefined) next.pipelinePid = current.pipelinePid;
   writeFileSync(sessionPath(runId), `${JSON.stringify(next, null, 2)}\n`, "utf8");
   return next;
 }
@@ -281,7 +287,7 @@ export function latestRunId(): RunId | undefined {
   return last?.runId;
 }
 
-export function latestRunningRunId(now = Date.now()): RunId | undefined {
+export function latestRunningRunId(): RunId | undefined {
   const root = runsRoot();
   mkdirSync(root, { recursive: true });
   const running: { runId: RunId; createdAt: string }[] = [];
@@ -309,9 +315,9 @@ export function resolveRunId(arg: string | undefined): RunId {
 }
 
 /** Default inspect target: newest running run, else most recent run. */
-export function resolveInspectRunId(arg: string | undefined, now = Date.now()): RunId {
+export function resolveInspectRunId(arg: string | undefined): RunId {
   if (arg !== undefined && arg.length > 0) return toRunId(arg);
-  const running = latestRunningRunId(now);
+  const running = latestRunningRunId();
   if (running !== undefined) return running;
   const latest = latestRunId();
   if (!latest) throw new Error("no runs stored");

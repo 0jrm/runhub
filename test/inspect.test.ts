@@ -94,6 +94,12 @@ test("inspect snapshot prints links and tails from the run dir", () => {
     };
     assert.equal(json.runId, id);
     assert.equal(json.links.cursorTranscript, "/tmp/fake-cursor-session.jsonl");
+
+    writeFileSync(join(runDir(toRunId(id)), "verify.out"), "ok from verify.out\n");
+    const verifyOnly = inspectText({ runId: id, tail: "verify", n: 10 });
+    assert.match(verifyOnly, /--- verify ---/);
+    assert.match(verifyOnly, /ok from verify\.out/);
+    assert.doesNotMatch(verifyOnly, /--- agent ---/);
   } finally {
     if (prev === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prev;

@@ -68,9 +68,19 @@ export function tempDir(tag: string): string {
   return mkdtempSync(join(tmpdir(), `runhub-${tag}-`));
 }
 
+export function writeIdentityToml(
+  configHome: string,
+  name = "Testy the bot",
+  email = "testy@users.noreply.github.com",
+): void {
+  mkdirSync(join(configHome, "runhub"), { recursive: true });
+  writeFileSync(join(configHome, "runhub", "identity.toml"), `name = "${name}"\nemail = "${email}"\n`);
+}
+
 export function writeProjectsToml(configHome: string, name: string, projectPath: string, extra = ""): void {
   mkdirSync(join(configHome, "runhub"), { recursive: true });
   writeFileSync(join(configHome, "runhub", "projects.toml"), `[${name}]\npath = "${projectPath}"\n${extra}`);
+  writeIdentityToml(configHome);
 }
 
 export function withEnv(fn: () => Promise<void>): Promise<void> {
@@ -78,7 +88,9 @@ export function withEnv(fn: () => Promise<void>): Promise<void> {
   const prevCfg = process.env.XDG_CONFIG_HOME;
   const prevPath = process.env.PATH;
   process.env.XDG_DATA_HOME = tempDir("xdg");
-  process.env.XDG_CONFIG_HOME = tempDir("xdg-cfg");
+  const cfg = tempDir("xdg-cfg");
+  process.env.XDG_CONFIG_HOME = cfg;
+  writeIdentityToml(cfg);
   return fn().finally(() => {
     if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdg;

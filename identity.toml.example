@@ -1,0 +1,4 @@
+# Author metadata for runhub commits only. chmod 600 this file.
+# Do not put PATs, SSH keys, or other secrets here.
+name = "Testy the bot"
+email = "testy@users.noreply.github.com"

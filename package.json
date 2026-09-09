@@ -16,7 +16,8 @@
     "dist",
     "README.md",
     "GROKBOT.md",
-    "LICENSE"
+    "LICENSE",
+    "identity.toml.example"
   ],
   "engines": {
     "node": ">=20"
