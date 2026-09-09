@@ -58,6 +58,24 @@ test("unknown flag, bad agent/review, and missing cwd fail fast", () => {
   assert.notEqual(review.status, 0);
   assert.match(review.stderr, /--review must be claude or none/);
 
+  const unknownModel = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", "/tmp", "--prompt", "x", "--agent", "claude", "--model", "not-a-real-model"],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(unknownModel.status, 0);
+  assert.match(unknownModel.stderr, /unrecognized --model 'not-a-real-model'/);
+  assert.match(unknownModel.stderr, /Try: --model /);
+
+  const fableAlias = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", "/tmp", "--prompt", "x", "--agent", "claude", "--model", "fable 5.1"],
+    { encoding: "utf8" },
+  );
+  assert.equal(fableAlias.status, 2);
+  assert.match(fableAlias.stderr, /not in projects\.toml/);
+  assert.doesNotMatch(fableAlias.stderr, /unrecognized --model/);
+
   const cfg = mkdtempSync(join(tmpdir(), "runhub-cli-cfg-"));
   const missingPath = join(tmpdir(), "no-such-runhub-dir");
   const missing = spawnSync(
@@ -482,6 +500,7 @@ test("doctor reports missing binaries on a restricted PATH", () => {
   assert.match(r.stdout, /gh: missing/);
   assert.match(r.stdout, /cursor-agent: missing/);
   assert.match(r.stdout, /claude: missing/);
+  assert.match(r.stdout, /claude model sonnet: ok/);
 });
 
 test("run without --detach waits and prints the report", () => {

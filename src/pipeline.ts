@@ -20,6 +20,7 @@ import {
   type Verdict,
   type VerifyResult,
 } from "./domain.js";
+import { resolveAgentModel } from "./model.js";
 import { agentArgv, findOnPath, resolveAgentBin, reviewArgv, runProcessGroup } from "./adapters.js";
 import { runVerify, annotateBaseline } from "./verify.js";
 import {
@@ -188,7 +189,7 @@ export function prepareRun(opts: PipelineOpts): RunId {
   const runId = newRunId();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const agent = opts.agent ?? "cursor";
-  const model = opts.model ?? defaultModel(agent);
+  const model = resolveAgentModel(agent, opts.model);
   const review = opts.review ?? "none";
   ensureRunDir(runId);
   const spec = opts.prompt;
