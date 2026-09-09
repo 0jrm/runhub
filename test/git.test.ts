@@ -142,6 +142,7 @@ test("missing identity fails fast before a run dir is created and names the toml
       assert.ok(err instanceof Error);
       assert.match(err.message, /missing git identity \(name and email\)/);
       assert.match(err.message, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.match(err.message, /run: runhub init --identity/);
       return true;
     });
     const work = tempDir("git-noid-prepare");
@@ -150,6 +151,7 @@ test("missing identity fails fast before a run dir is created and names the toml
       assert.ok(err instanceof Error);
       assert.match(err.message, /missing git identity \(name and email\)/);
       assert.match(err.message, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.match(err.message, /run: runhub init --identity/);
       return true;
     });
   });

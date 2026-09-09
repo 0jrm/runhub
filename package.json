@@ -16,6 +16,8 @@
     "dist",
     "README.md",
     "GROKBOT.md",
+    "QUICKSTART.md",
+    "CONFIG.md",
     "LICENSE",
     "identity.toml.example"
   ],

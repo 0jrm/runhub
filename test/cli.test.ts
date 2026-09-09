@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { parseTimeout } from "../src/cli.js";
-import { gitRepo, prependPath, tempDir, writeFakeAgent, writeIdentityToml, writeProjectsToml } from "./helpers.js";
+import { gitRepo, prependPath, restrictedPath, tempDir, writeFakeAgent, writeIdentityToml, writeProjectsToml } from "./helpers.js";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "../../dist/cli.js");
 
@@ -109,7 +109,7 @@ test("run prints only the run id and wait prints the report", () => {
     const started = Date.now();
     const r = spawnSync(
       process.execPath,
-      [cli, "run", "--cwd", work, "--prompt", "x", "--timeout", "10s", "--test-cmd", "true"],
+      [cli, "run", "--detach", "--cwd", work, "--prompt", "x", "--timeout", "10s", "--test-cmd", "true"],
       { encoding: "utf8", env },
     );
     const elapsed = Date.now() - started;
@@ -142,7 +142,7 @@ test("run takes the prompt from a file or stdin, and needs exactly one source", 
   const spec = "line one\nline two\n";
   const specPath = join(binDir, "spec.md");
   writeFileSync(specPath, spec);
-  const base = [cli, "run", "--cwd", work, "--timeout", "20s", "--test-cmd", "true"];
+  const base = [cli, "run", "--detach", "--cwd", work, "--timeout", "20s", "--test-cmd", "true"];
 
   const promptOf = (stdout: string): string => {
     const last = stdout.trimEnd().split("\n").pop() ?? "";
@@ -211,7 +211,7 @@ test("wait times out with exit 3 while a sleeping agent keeps running", async ()
   };
   const r = spawnSync(
     process.execPath,
-    [cli, "run", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
+    [cli, "run", "--detach", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
     { encoding: "utf8", env },
   );
   assert.equal(r.status, 0, r.stderr);
@@ -248,7 +248,7 @@ test("SIGKILL of the __exec worker makes list show stale", async () => {
   };
   const r = spawnSync(
     process.execPath,
-    [cli, "run", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
+    [cli, "run", "--detach", "--cwd", work, "--prompt", "hang", "--timeout", "30s"],
     { encoding: "utf8", env },
   );
   assert.equal(r.status, 0, r.stderr);
@@ -313,7 +313,7 @@ test("--cwd accepts a project name and uses that project's test", () => {
   };
   const named = spawnSync(
     process.execPath,
-    [cli, "run", "--cwd", "toy", "--prompt", "x", "--timeout", "20s"],
+    [cli, "run", "--detach", "--cwd", "toy", "--prompt", "x", "--timeout", "20s"],
     { encoding: "utf8", env },
   );
   assert.equal(named.status, 0, named.stderr);
@@ -330,7 +330,7 @@ test("--cwd accepts a project name and uses that project's test", () => {
   writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "false"\n`);
   const override = spawnSync(
     process.execPath,
-    [cli, "run", "--cwd", "toy", "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
+    [cli, "run", "--detach", "--cwd", "toy", "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
     { encoding: "utf8", env },
   );
   assert.equal(override.status, 0, override.stderr);
@@ -361,7 +361,7 @@ test("run accepts a listed path and refuses a path that is not in projects.toml"
 
   const listed = spawnSync(
     process.execPath,
-    [cli, "run", "--cwd", work, "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
+    [cli, "run", "--detach", "--cwd", work, "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
     { encoding: "utf8", env },
   );
   assert.equal(listed.status, 0, listed.stderr);
@@ -431,5 +431,79 @@ exit 0
   const merged = spawnSync(process.execPath, [cli, "merge", "run-merge01aaaa"], { encoding: "utf8", env });
   assert.equal(merged.status, 0, merged.stderr);
   assert.match(readFileSync(argvLog, "utf8"), /pr merge https:\/\/github.com\/0jrm\/toy\/pull\/9 --squash --delete-branch/);
+});
+
+test("init --yes copies identity.toml.example and doctor lists git", () => {
+  const cfg = tempDir("cli-init-cfg");
+  const env = { ...process.env, XDG_CONFIG_HOME: cfg };
+  const first = spawnSync(process.execPath, [cli, "init", "--yes"], { encoding: "utf8", env });
+  assert.equal(first.status, 0, first.stderr);
+  const ident = join(cfg, "runhub", "identity.toml");
+  assert.equal(existsSync(ident), true);
+  assert.equal(statSync(ident).mode & 0o777, 0o600);
+  assert.match(first.stdout, /wrote /);
+  assert.match(first.stdout, /git: ok /);
+  const again = spawnSync(process.execPath, [cli, "init", "--yes", "--identity"], { encoding: "utf8", env });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /kept /);
+  const onlyId = spawnSync(process.execPath, [cli, "init", "--identity"], { encoding: "utf8", env });
+  assert.equal(onlyId.status, 0, onlyId.stderr);
+  assert.match(onlyId.stdout, /kept /);
+  assert.doesNotMatch(onlyId.stdout, /git: /);
+});
+
+test("add lists a git repo in projects.toml and is idempotent", () => {
+  const cfg = tempDir("cli-add-cfg");
+  const work = tempDir("cli-add-work");
+  gitRepo(work);
+  const env = { ...process.env, XDG_CONFIG_HOME: cfg };
+  const added = spawnSync(process.execPath, [cli, "add", work], { encoding: "utf8", env });
+  assert.equal(added.status, 0, added.stderr);
+  assert.match(added.stdout, /added \[/);
+  const toml = readFileSync(join(cfg, "runhub", "projects.toml"), "utf8");
+  assert.match(toml, /path = /);
+  const again = spawnSync(process.execPath, [cli, "add", work], { encoding: "utf8", env });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /already listed:/);
+  const bare = tempDir("cli-add-bare");
+  const refused = spawnSync(process.execPath, [cli, "add", bare], { encoding: "utf8", env });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /not a git repo/);
+});
+
+test("doctor reports missing binaries on a restricted PATH", () => {
+  const path = restrictedPath(["git"]);
+  const r = spawnSync(process.execPath, [cli, "doctor"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: path },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /git: ok /);
+  assert.match(r.stdout, /gh: missing/);
+  assert.match(r.stdout, /cursor-agent: missing/);
+  assert.match(r.stdout, /claude: missing/);
+});
+
+test("run without --detach waits and prints the report", () => {
+  const xdg = tempDir("cli-wait-xdg");
+  const work = tempDir("cli-wait-work");
+  const binDir = tempDir("cli-wait-bin");
+  gitRepo(work);
+  writeFakeAgent(binDir);
+  writeProjectsToml(xdg, "work", work);
+  const env = {
+    ...process.env,
+    XDG_DATA_HOME: xdg,
+    XDG_CONFIG_HOME: xdg,
+    PATH: prependPath(binDir),
+  };
+  const r = spawnSync(
+    process.execPath,
+    [cli, "run", "--cwd", work, "--prompt", "x", "--timeout", "20s", "--test-cmd", "true"],
+    { encoding: "utf8", env },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^runhub: [0-9a-f-]{36}\n/);
+  assert.match(r.stdout, /files changed:/);
 });
 

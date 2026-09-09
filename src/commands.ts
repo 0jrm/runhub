@@ -79,9 +79,10 @@ export type RunArgs = {
   model?: string;
   review?: string;
   noPreamble?: boolean;
+  detach?: boolean;
 };
 
-export function startRun(args: RunArgs): CmdResult {
+export function launchRun(args: RunArgs): CmdResult {
   const agent = parseAgent(args.agent);
   const review = parseReview(args.review);
   const timeoutMs = parseTimeout(args.timeout);
@@ -114,6 +115,20 @@ export function startRun(args: RunArgs): CmdResult {
   appendEvent(runId, { kind: "pipeline_started", ts: nowIso(), runId, pid });
   persistSession(runId, { pipelinePid: pid, links: { pipelinePid: String(pid) } });
   return { code: 0, stdout: `runhub: ${runId}\n`, stderr: "" };
+}
+
+export async function startRun(args: RunArgs): Promise<CmdResult> {
+  const started = launchRun(args);
+  if (args.detach === true) return started;
+  const id = started.stdout.trim().slice("runhub: ".length);
+  const timeoutMs = parseTimeout(args.timeout);
+  const waitMs = Math.max(DEFAULT_WAIT_MS, timeoutMs + 60_000);
+  const waited = await waitRun(id, `${waitMs}ms`);
+  return {
+    code: waited.code,
+    stdout: `${started.stdout}${waited.stdout}`,
+    stderr: waited.stderr,
+  };
 }
 
 export async function execRun(id: string): Promise<CmdResult> {

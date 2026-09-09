@@ -17,13 +17,17 @@ import {
   type CmdResult,
 } from "./commands.js";
 import { parseTailKind } from "./inspect.js";
+import { addProject, doctorRunhub, initRunhub } from "./setup.js";
 
 export { parseTimeout };
 
 const USAGE = `runhub <command>
 
 Commands:
-  run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>] [--no-preamble]
+  init [--yes] [--identity]
+  doctor
+  add <path>
+  run --cwd <dir|name> (--prompt <text> | --prompt - | --prompt-file <path>) [--agent cursor|claude] [--model <id>] [--review claude|none] [--timeout <duration>] [--test-cmd <cmd>] [--no-preamble] [--detach]
   wait <runId> [--timeout <duration>]
   merge <runId>
   status [runId]
@@ -32,6 +36,9 @@ Commands:
   inspect [runId] [-f|--follow] [-n <lines>] [--tail agent|review|verify|all] [--links-only] [--no-tail] [--json]
   prune --keep <n>
 
+init creates ~/.config/runhub and copies identity.toml.example if identity.toml is missing. --yes is noninteractive. doctor checks git, gh, cursor-agent, and claude.
+add appends a git repo to projects.toml.
+run waits for the report. --detach prints runhub: <runId> and returns immediately.
 --prompt - reads the prompt from stdin. --prompt-file reads it from a file.
 inspect with no run id uses the latest running run, or the most recent run if none are running.
 `;
@@ -46,8 +53,11 @@ const RUN_FLAGS = new Set([
   "model",
   "review",
   "no-preamble",
+  "detach",
 ]);
-const RUN_SWITCHES = new Set(["no-preamble"]);
+const RUN_SWITCHES = new Set(["no-preamble", "detach"]);
+const INIT_FLAGS = new Set(["yes", "identity"]);
+const INIT_SWITCHES = new Set(["yes", "identity"]);
 const WAIT_FLAGS = new Set(["timeout"]);
 const PRUNE_FLAGS = new Set(["keep"]);
 const INSPECT_FLAGS = new Set(["follow", "n", "tail", "links-only", "no-tail", "json"]);
@@ -129,10 +139,26 @@ function writeResult(result: CmdResult): number {
   return result.code;
 }
 
-type Command = "run" | "wait" | "merge" | "status" | "report" | "list" | "inspect" | "prune" | "help" | "__exec";
+type Command =
+  | "init"
+  | "doctor"
+  | "add"
+  | "run"
+  | "wait"
+  | "merge"
+  | "status"
+  | "report"
+  | "list"
+  | "inspect"
+  | "prune"
+  | "help"
+  | "__exec";
 
 function parseCommand(raw: string | undefined): Command | undefined {
   switch (raw) {
+    case "init":
+    case "doctor":
+    case "add":
     case "run":
     case "wait":
     case "merge":
@@ -167,12 +193,26 @@ async function main(argv: string[]): Promise<number> {
   const rest = args.slice(1);
 
   switch (command) {
+    case "init": {
+      const { flags } = parseFlags(rest, INIT_FLAGS, INIT_SWITCHES);
+      return writeResult(initRunhub({ yes: flags.has("yes"), identity: flags.has("identity") }));
+    }
+    case "doctor": {
+      parseFlags(rest, new Set());
+      return writeResult(doctorRunhub());
+    }
+    case "add": {
+      const { positional } = parseFlags(rest, new Set());
+      const pathArg = positional[0];
+      if (pathArg === undefined) throw new Error("add requires a path");
+      return writeResult(addProject(pathArg));
+    }
     case "run": {
       const { flags } = parseFlags(rest, RUN_FLAGS, RUN_SWITCHES);
       const cwdRaw = flags.get("cwd");
       if (cwdRaw === undefined) throw new Error("run requires --cwd");
       return writeResult(
-        startRun({
+        await startRun({
           cwd: cwdRaw,
           prompt: promptText(flags),
           timeout: flags.get("timeout"),
@@ -181,6 +221,7 @@ async function main(argv: string[]): Promise<number> {
           model: flags.get("model"),
           review: flags.get("review"),
           noPreamble: flags.has("no-preamble"),
+          detach: flags.has("detach"),
         }),
       );
     }
