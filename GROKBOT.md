@@ -39,3 +39,5 @@ If wait exits 0 or 1, read stdout. Paraphrase in a few short sentences, like a f
 If they say "merge it", run `runhub merge <runId>` with the most recent runId for that project from `runhub list`. The review lives on the GitHub PR when one opened, not in this chat.
 
 The stored report is `~/.local/share/runhub/runs/<runId>/report.md`. If they want the long log, give that path as a `full:` markdown hyperlink. Stop.
+
+On the laptop, Cursor can call the same run/wait/list/status/report/inspect commands through `runhub-mcp` (see README).

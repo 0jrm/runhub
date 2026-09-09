@@ -69,10 +69,23 @@ The report starts with outcome, project name, and duration. If the agent's last 
 runhub status
 runhub report
 runhub list
+runhub inspect
 runhub prune --keep 20
 ```
 
 `list` shows run id, project basename, outcome, a blocked column, and time. The blocked column is `blocked` or `-`. It prints the outcome tag, so `changed, untested` in a report is `changed-untested` in `list`. A run is `running` only while its pipeline PID is alive. Otherwise an unfinished run is `stale`. `list` ends with a tally of the last 30 runs.
+
+```bash
+runhub inspect
+runhub inspect <runId> -n 50 --tail agent
+runhub inspect <runId> --links-only
+```
+
+`inspect` reads only the run directory. With no run id it picks the latest run whose pipeline PID is still alive, otherwise the most recent run. It prints a `links:` block (worktree, log paths, pids from `session.json`, plus any http(s) URLs already sitting in the logs) and then tails. `-f`/`--follow` keeps printing new log bytes until that pipeline PID exits. `--json` dumps the snapshot once and does not follow. `--no-tail` and `--links-only` skip the log bodies.
+
+`session.json` is written when the run is created and updated with the pipeline pid, agent pgid, and worktree path. Cursor or Claude transcript URLs are stored only if they already appear in those files. This command does not scrape HTML.
+
+When runhub creates a run worktree it sets local `user.name` and `user.email` if git cannot already resolve them, so the post-agent commit does not fail with `Author identity unknown`. It does not write `--global`. Defaults are `runhub` / `runhub@localhost`. Override with `RUNHUB_GIT_NAME` and `RUNHUB_GIT_EMAIL` in the environment of the `runhub` process.
 
 Logs live in `~/.local/share/runhub/runs/`. Each run directory is mode 0700. `prompt.txt`, `spec.txt`, `review-prompt.txt`, and `report.md` are plaintext. Anyone who can read that tree can read the prompts. Finished runs prune older local runs down to 30. `prune --keep N` still deletes the run dir, the worktree, and the local `runhub/<runId>` branch. It never deletes the remote branch or the PR.
 
@@ -81,6 +94,26 @@ Run `npm run contract` before every tag and after upgrading `cursor-agent`, `cla
 Optional flags: `--timeout 30m` (already the default), `--test-cmd "npm test"`, `--agent`, `--model`, `--review`, `--prompt-file`, `--no-preamble`. `wait` also takes `--timeout`.
 
 Paste `GROKBOT.md` into Grok as a custom instruction.
+
+## Cursor MCP
+
+`runhub-mcp` is a local stdio MCP server. It calls the same code as `runhub run`, `wait`, `list`, `status`, `report`, and `inspect`. `--cwd` still has to be a name or path from `projects.toml`. There is no `merge` tool.
+
+Start it with `runhub-mcp` after a global install, or `node dist/mcp.js` from this repo.
+
+Tool names: `run`, `wait`, `list`, `status`, `report`, `inspect`.
+
+Cursor reads `~/.cursor/mcp.json`. One-line shape: `{"mcpServers":{"runhub":{"command":"runhub-mcp"}}}`. Expanded:
+
+```json
+{
+  "mcpServers": {
+    "runhub": {
+      "command": "runhub-mcp"
+    }
+  }
+}
+```
 
 ## If you are sharing this
 
