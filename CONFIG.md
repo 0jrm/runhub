@@ -44,7 +44,7 @@ Resolution order:
 1. `RUNHUB_GIT_NAME` / `RUNHUB_GIT_EMAIL` (non-empty env)
 2. `name` / `email` in `identity.toml`
 
-If either name or email is still missing, runhub fails fast, prints the expected toml path, and suggests `runhub init --identity`. There is no silent `runhub@localhost` fallback.
+If either name or email is still missing, runhub fails fast, prints the expected toml path, and suggests `runhub init --identity`. There is no silent `runhub@localhost` fallback. Leftover `runhub@localhost` may still appear in an old local `.git/config` from before identity.toml — that is leftover, not how new runs resolve identity.
 
 How it is applied:
 
