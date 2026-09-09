@@ -104,6 +104,7 @@ export function runProcessGroup(opts: {
   timeoutMs: number;
   signal?: AbortSignal;
   appendStdout?: boolean;
+  env?: NodeJS.ProcessEnv;
   onStart?: (pgid: number) => void;
 }): Promise<SpawnResult> {
   const [file, ...args] = opts.argv;
@@ -114,7 +115,7 @@ export function runProcessGroup(opts: {
   return new Promise((resolve) => {
     const child = spawn(file, args, {
       cwd: opts.cwd,
-      env: process.env,
+      env: opts.env ?? process.env,
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });

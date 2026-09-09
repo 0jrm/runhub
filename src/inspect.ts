@@ -4,7 +4,6 @@ import {
   emptySession,
   loadView,
   pidAlive,
-  pipelineLogPath,
   readSession,
   resolveInspectRunId,
   type RunSession,
@@ -94,9 +93,14 @@ export function snapshotInspect(opts: InspectOpts): InspectSnapshot {
     tails.review = fileTail(session.logs.review, n);
   }
   if (wantTail && (tail === "all" || tail === "verify")) {
+    const fromFile = fileTail(session.logs.verify, n);
     const fromView = view.verify?.testTail;
     tails.verify =
-      fromView !== undefined && fromView.length > 0 ? lastLines(fromView, n) : fileTail(pipelineLogPath(id), n);
+      fromFile.length > 0
+        ? fromFile
+        : fromView !== undefined && fromView.length > 0
+          ? lastLines(fromView, n)
+          : fileTail(session.logs.pipeline, n);
   }
   return {
     runId: id,
@@ -133,8 +137,8 @@ function logPaths(snap: InspectSnapshot, tail: TailKind): string[] {
   const logs = snap.session.logs;
   if (tail === "agent") return [logs.agentStdout, logs.agentStderr];
   if (tail === "review") return [logs.review];
-  if (tail === "verify") return [logs.pipeline];
-  return [logs.agentStdout, logs.agentStderr, logs.review, logs.pipeline];
+  if (tail === "verify") return [logs.verify, logs.pipeline];
+  return [logs.agentStdout, logs.agentStderr, logs.review, logs.verify, logs.pipeline];
 }
 
 function readOffset(path: string): { size: number; text: string } {

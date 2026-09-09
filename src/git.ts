@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, symlinkSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { SPAWN_MAX_BUFFER, type DiffRange } from "./domain.js";
+import { ParseError, SPAWN_MAX_BUFFER, type DiffRange } from "./domain.js";
 
 export const IGNORED_DEP_NAMES = ["node_modules", ".venv", "venv", "target", ".tox"] as const;
 
@@ -16,12 +17,18 @@ export type LandResult =
   | { didCommit: true; sha: string; porcelain: string }
   | { didCommit: false; sha: string; porcelain: string };
 
-function git(cwd: string, args: string[], timeoutMs = 30_000): { status: number; stdout: string; stderr: string } {
+function git(
+  cwd: string,
+  args: string[],
+  timeoutMs = 30_000,
+  extraEnv?: NodeJS.ProcessEnv,
+): { status: number; stdout: string; stderr: string } {
   const r = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: SPAWN_MAX_BUFFER,
+    ...(extraEnv === undefined ? {} : { env: { ...process.env, ...extraEnv } }),
   });
   return {
     status: r.status ?? 1,
@@ -62,40 +69,99 @@ function linkIgnoredDeps(repo: string, tree: string): void {
   }
 }
 
-export function gitIdentityFromEnv(): { name: string; email: string } {
-  const name = process.env.RUNHUB_GIT_NAME?.trim();
-  const email = process.env.RUNHUB_GIT_EMAIL?.trim();
+export type GitIdentity = { name: string; email: string };
+
+export function identityTomlPath(): string {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "runhub", "identity.toml");
+}
+
+function nonemptyEnv(key: string): string | undefined {
+  const value = process.env[key]?.trim();
+  return value !== undefined && value.length > 0 ? value : undefined;
+}
+
+function parseTomlScalar(raw: string): string {
+  const s = raw.trim();
+  if (s.startsWith('"')) {
+    const end = s.indexOf('"', 1);
+    if (end === -1) throw new ParseError("unterminated quoted value");
+    const after = s.slice(end + 1).trim();
+    if (after.length > 0 && !after.startsWith("#")) {
+      throw new ParseError("trailing garbage after quoted value");
+    }
+    return s.slice(1, end);
+  }
+  const token = s.match(/^([^\s#]+)/);
+  if (token?.[1] === undefined) throw new ParseError("missing value");
+  return token[1];
+}
+
+export function parseIdentityToml(text: string): { name?: string; email?: string } {
+  let name: string | undefined;
+  let email: string | undefined;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
+    if (trimmed.startsWith("[")) {
+      throw new ParseError(`identity.toml tables are not supported: ${trimmed}`);
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) throw new ParseError(`invalid line: ${trimmed}`);
+    const key = trimmed.slice(0, eq).trim();
+    const value = parseTomlScalar(trimmed.slice(eq + 1));
+    if (key === "name") name = value;
+    else if (key === "email") email = value;
+  }
   return {
-    name: name && name.length > 0 ? name : "runhub",
-    email: email && email.length > 0 ? email : "runhub@localhost",
+    ...(name !== undefined && name.length > 0 ? { name } : {}),
+    ...(email !== undefined && email.length > 0 ? { email } : {}),
   };
 }
 
-function gitConfigValue(cwd: string, key: string): string | undefined {
-  const r = git(cwd, ["config", "--get", key]);
-  if (r.status !== 0) return undefined;
-  const value = r.stdout.trim();
-  return value.length > 0 ? value : undefined;
+function identityFromFile(): { name?: string; email?: string } {
+  const path = identityTomlPath();
+  if (!existsSync(path)) return {};
+  return parseIdentityToml(readFileSync(path, "utf8"));
 }
 
-/** Set local user.name / user.email when git cannot already resolve them. Does not write --global. */
-export function ensureLocalGitIdentity(cwd: string): void {
-  const haveName = gitConfigValue(cwd, "user.name");
-  const haveEmail = gitConfigValue(cwd, "user.email");
-  if (haveName !== undefined && haveEmail !== undefined) return;
-  const id = gitIdentityFromEnv();
-  if (haveName === undefined) {
-    const r = git(cwd, ["config", "user.name", id.name]);
+/** RUNHUB_GIT_NAME/EMAIL, then identity.toml. Never git config --global. Fails naming the toml path. */
+export function resolveGitIdentity(): GitIdentity {
+  const file = identityFromFile();
+  const name = nonemptyEnv("RUNHUB_GIT_NAME") ?? file.name;
+  const email = nonemptyEnv("RUNHUB_GIT_EMAIL") ?? file.email;
+  if (name !== undefined && email !== undefined) return { name, email };
+  throw new Error(`missing git identity (name and email): ${identityTomlPath()}`);
+}
+
+export function gitIdentityEnv(id: GitIdentity = resolveGitIdentity()): NodeJS.ProcessEnv {
+  return {
+    GIT_AUTHOR_NAME: id.name,
+    GIT_AUTHOR_EMAIL: id.email,
+    GIT_COMMITTER_NAME: id.name,
+    GIT_COMMITTER_EMAIL: id.email,
+  };
+}
+
+/** Write user.name/email only to this worktree's config.worktree. Does not touch shared .git/config or --global. */
+export function ensureLocalGitIdentity(cwd: string): GitIdentity {
+  const id = resolveGitIdentity();
+  const dir = git(cwd, ["rev-parse", "--absolute-git-dir"]);
+  if (dir.status !== 0) {
+    throw new Error(`git rev-parse --absolute-git-dir failed: ${dir.stderr.trim() || dir.stdout.trim()}`);
+  }
+  const gitDir = dir.stdout.trim();
+  if (gitDir.length === 0) throw new Error("git rev-parse --absolute-git-dir was empty");
+  const file = join(gitDir, "config.worktree");
+  for (const [key, value] of [
+    ["user.name", id.name],
+    ["user.email", id.email],
+  ] as const) {
+    const r = git(cwd, ["config", "--file", file, key, value]);
     if (r.status !== 0) {
-      throw new Error(`git config user.name failed: ${r.stderr.trim() || r.stdout.trim()}`);
+      throw new Error(`git config --file ${file} ${key} failed: ${r.stderr.trim() || r.stdout.trim()}`);
     }
   }
-  if (haveEmail === undefined) {
-    const r = git(cwd, ["config", "user.email", id.email]);
-    if (r.status !== 0) {
-      throw new Error(`git config user.email failed: ${r.stderr.trim() || r.stdout.trim()}`);
-    }
-  }
+  return id;
 }
 
 export function addDetachedWorktree(opts: { repo: string; tree: string; sha: string }): void {
@@ -135,7 +201,7 @@ export function commitMessage(prompt: string): string {
 }
 
 export function landDirtyWork(wt: RunWorktree, prompt: string): LandResult {
-  ensureLocalGitIdentity(wt.tree);
+  const id = ensureLocalGitIdentity(wt.tree);
   const porcelain = gitText(wt.tree, ["status", "--porcelain"]);
   if (porcelain.trim().length === 0) {
     return { didCommit: false, sha: revParseHead(wt.tree), porcelain };
@@ -148,7 +214,12 @@ export function landDirtyWork(wt: RunWorktree, prompt: string): LandResult {
   if (add.status !== 0) {
     throw new Error(`git add failed: ${add.stderr.trim() || add.stdout.trim()}`);
   }
-  const commit = git(wt.tree, ["commit", "-q", "-m", commitMessage(prompt), "--"]);
+  const commit = git(
+    wt.tree,
+    ["commit", "-q", "-m", commitMessage(prompt), "--"],
+    30_000,
+    gitIdentityEnv(id),
+  );
   if (commit.status !== 0) {
     throw new Error(`git commit failed: ${commit.stderr.trim() || commit.stdout.trim()}`);
   }

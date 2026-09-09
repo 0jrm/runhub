@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { parseTimeout } from "../src/cli.js";
-import { gitRepo, prependPath, tempDir, writeFakeAgent, writeProjectsToml } from "./helpers.js";
+import { gitRepo, prependPath, tempDir, writeFakeAgent, writeIdentityToml, writeProjectsToml } from "./helpers.js";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "../../dist/cli.js");
 
@@ -304,6 +304,7 @@ test("--cwd accepts a project name and uses that project's test", () => {
   writeFakeAgent(binDir);
   mkdirSync(join(xdg, "runhub"), { recursive: true });
   writeFileSync(join(xdg, "runhub", "projects.toml"), `[toy]\npath = "${work}"\ntest = "true"\n`);
+  writeIdentityToml(xdg);
   const env = {
     ...process.env,
     XDG_DATA_HOME: xdg,
