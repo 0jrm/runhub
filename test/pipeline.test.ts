@@ -294,7 +294,7 @@ sys.exit(2)
     process.env.PATH = prependPath(binDir);
     const result = await runPipeline({ cwd: work, prompt: "fail", testCmd: "true", timeoutMs: 10_000 });
     assert.match(result.markdown, /^fail  /);
-    assert.match(result.markdown, /stderr:\nerr5/);
+    assert.match(result.markdown, /stderr:\n--- [^\n]*\n\| err5/);
     assert.doesNotMatch(result.markdown, /err4\n/);
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /work_committed/);
@@ -952,6 +952,36 @@ print("APPROVE")
     const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
     assert.match(events, /gh pr comment failed: boom-comment/);
     assert.match(events, /"kind":"review_comment_recorded".*"status":"failed"/);
+    prune(0);
+  });
+});
+
+test("a no-changes run does not push a branch or attempt a PR", async () => {
+  await withEnv(async () => {
+    const work = tempDir("work");
+    gitRepo(work);
+    const bare = tempDir("bare");
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: bare, encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", bare], { cwd: work, encoding: "utf8" });
+    const binDir = tempDir("bin");
+    writeBin(binDir, "cursor-agent", `#!/bin/sh\necho '{"type":"result","result":"confirmed cwd, nothing to do"}'\n`);
+    process.env.PATH = prependPath(binDir);
+    const result = await runPipeline({
+      cwd: work,
+      prompt: "confirm cwd and exit",
+      testCmd: "true",
+      timeoutMs: 20_000,
+      remote: "origin",
+    });
+    assert.match(result.markdown, /^no-changes  /);
+    assert.doesNotMatch(result.markdown, /^pushed: /m);
+    assert.doesNotMatch(result.markdown, /^pr: /m);
+    assert.doesNotMatch(result.markdown, /gh pr create failed/);
+    const events = readFileSync(join(runsRoot(), result.runId, "events.jsonl"), "utf8");
+    assert.doesNotMatch(events, /push_recorded/);
+    assert.doesNotMatch(events, /pr_opened/);
+    const refs = spawnSync("git", ["branch", "-a"], { cwd: bare, encoding: "utf8" }).stdout ?? "";
+    assert.equal(refs.includes(result.runId), false, `stray remote ref: ${refs}`);
     prune(0);
   });
 });
