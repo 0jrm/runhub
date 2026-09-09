@@ -83,7 +83,7 @@ claude mcp add -s user -t stdio runhub -- runhub-mcp
 The door is a `claude remote-control` session restricted to the six MCP tools. Setup:
 
 ```bash
-~/runhub/_setup-door.sh
+./scripts/setup-door.sh
 ```
 
 This creates `~/runhub-door/` with a CLAUDE.md skill and a `.claude/settings.json` deny-list (no Bash, no Read, no Monitor), installs a systemd user service, and starts the door. The URL changes on each restart and is written to `~/runhub-door/current-url.txt`. A desktop notification fires when the door comes up.
